@@ -2,18 +2,18 @@
 
 A personal app for IELTS Academic practice: vocabulary cards scheduled with
 FSRS, writing with drafts and rewrites, a practice calendar, a mistake log and
-optional AI feedback. It runs on a home server and is used over the LAN on
-port **1111**.
+optional AI feedback. It runs on a home server and is accessed securely over
+Tailscale using automatic HTTPS. Docker binds only to `127.0.0.1:1111`,
+completely blocking unauthenticated access from the local Wi-Fi / LAN.
 
 > [!WARNING]
 > **Vibe-coded, for personal use only.** This project was built with an AI
 > coding assistant for one person's own IELTS study. It has not been security
 > reviewed or tested for production, and there is **no guarantee of security**.
 >
-> - There is no login, no user accounts and no rate limiting. Anyone who can
->   reach port 1111 can read and change everything.
-> - Keep it on a trusted home network. Never port-forward it or expose it to
->   the internet.
+> - There is no login, no user accounts and no rate limiting.
+> - Access is secured exclusively via Tailscale mesh VPN (`tailscale serve`).
+>   Never expose port 1111 to LAN (`0.0.0.0`) or port-forward it to the internet.
 > - Do not use it as a product or run it for other people. If you want to,
 >   treat this code as a starting point and do your own security review first.
 >
@@ -25,9 +25,10 @@ port **1111**.
 mkdir -p data backups          # host folders for the database and backups
 cp .env.example .env           # optional: AI feedback settings, then add AI_API_KEY
 docker compose up -d --build   # first build compiles Rust, takes a few minutes
+tailscale serve --bg --yes --https=443 http://127.0.0.1:1111
 ```
 
-Then open `http://<server-ip>:1111`.
+Then open `https://<your-node>.<your-tailnet>.ts.net` (e.g. `https://alexander.taile859de.ts.net`).
 
 The database is `./data/ielts.db` on the host. Rebuilding or upgrading the
 image doesn't touch it. Migrations run automatically when the app starts.
@@ -71,9 +72,12 @@ defaults point at the university gateway.
 Two terminals:
 
 ```bash
-cd backend && cargo run        # API on :1111, database in backend/data/, reads ../.env
-cd frontend && npm run dev     # UI on :5173, forwards /api to :1111
+cd backend && cargo run        # API on 127.0.0.1:1111, database in backend/data/, reads ../.env
+cd frontend && npm run dev     # UI on 127.0.0.1:5173, forwards /api to :1111
 ```
+
+Both listen on this machine only. To try the dev UI on a phone, use
+`tailscale serve` for port 5173 rather than opening it to the LAN.
 
 Checks: `cargo test`, `cargo clippy`, `npm run check`.
 
@@ -81,7 +85,7 @@ Checks: `cargo test`, `cargo clippy`, `npm run check`.
 
 | Variable            | Default           | Meaning                                  |
 |---------------------|-------------------|------------------------------------------|
-| `APP_BIND`          | `0.0.0.0:1111`    | Listen address                           |
+| `APP_BIND`          | `127.0.0.1:1111`  | Listen address (the Docker image sets `0.0.0.0:1111`) |
 | `DATABASE_PATH`     | `data/ielts.db`   | SQLite file (folder is created)          |
 | `STATIC_DIR`        | `../frontend/dist`| Built frontend; skipped if missing       |
 | `APP_TZ`            | `Asia/Bangkok`    | Where "today" starts and ends            |

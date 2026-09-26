@@ -4,7 +4,8 @@ use crate::application::ai_feedback_service::ModelLimit;
 
 /// Settings read from environment variables, with defaults for local dev.
 pub struct Config {
-    /// Address to listen on. 0.0.0.0 = reachable from the home network.
+    /// Address to listen on. The default, 127.0.0.1, is this machine only;
+    /// the Docker image sets 0.0.0.0 and docker-compose decides what reaches it.
     pub bind: String,
     /// SQLite file. Its folder is created if missing.
     pub database_path: String,
@@ -63,7 +64,7 @@ impl Config {
         };
 
         Ok(Config {
-            bind: env_or("APP_BIND", "0.0.0.0:1111"),
+            bind: env_or("APP_BIND", "127.0.0.1:1111"),
             database_path: env_or("DATABASE_PATH", "data/ielts.db"),
             static_dir: env_or("STATIC_DIR", "../frontend/dist"),
             tz,

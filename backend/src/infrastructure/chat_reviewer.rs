@@ -31,9 +31,11 @@ Finally, add up to 3 open questions about the ideas, examples or structure.
 Reply with only this JSON object and nothing else:
 {"bands":{"task":0,"coherence":0,"lexical":0,"grammar":0,"overall":0},"summary":"two or three sentences","issues":[{"quote":"","tag":"","hint":""}],"questions":[""]}"#;
 
-/// The answer is a JSON object of a few hundred tokens; this leaves room
-/// without letting a runaway reply eat the daily quota.
-const MAX_TOKENS: u32 = 1500;
+/// Upper limit for one reply. The answer itself is a few hundred tokens, but
+/// "thinking" models (Gemini) spend part of this budget on hidden reasoning
+/// first; with 1500 their JSON was cut off. A limit only caps usage, it
+/// doesn't reserve quota.
+const MAX_TOKENS: u32 = 4000;
 
 pub struct ChatCompletionsReviewer {
     client: reqwest::Client,
@@ -101,6 +103,20 @@ impl ChatCompletionsReviewer {
             log::warn!("unexpected AI gateway response: {err}");
             AppError::Unavailable("the AI gateway sent a response in an unexpected format".into())
         })?;
+
+        // Some gateway errors arrive as HTTP 200 with an "error" field and
+        // no choices (e.g. a model that can't take images).
+        if parsed.choices.is_empty() {
+            let message = parsed
+                .error
+                .as_ref()
+                .map(gateway_error_message)
+                .unwrap_or_else(|| "empty reply".into());
+            log::warn!("AI gateway returned no choices for {model}: {message}");
+            return Err(AppError::Unavailable(format!(
+                "the gateway could not run {model}: {message}"
+            )));
+        }
 
         let text = parsed
             .choices
@@ -219,8 +235,24 @@ impl Message {
 
 #[derive(Deserialize)]
 struct ChatResponse {
+    #[serde(default)]
     choices: Vec<Choice>,
     usage: Option<Usage>,
+    /// Either `"text"` or `{"message": "text", ...}` depending on the gateway.
+    error: Option<serde_json::Value>,
+}
+
+/// The readable part of a gateway error, whichever shape it came in.
+fn gateway_error_message(error: &serde_json::Value) -> String {
+    let text = match error {
+        serde_json::Value::String(text) => text.clone(),
+        other => other
+            .get("message")
+            .and_then(|m| m.as_str())
+            .map(str::to_string)
+            .unwrap_or_else(|| other.to_string()),
+    };
+    text.chars().take(200).collect()
 }
 
 #[derive(Deserialize)]
@@ -269,6 +301,19 @@ mod tests {
         assert!(text.contains("Do universities focus too much on jobs?"));
         assert!(text.contains("Essay (version 2, 5 words):\nUniversities play a key role."));
         assert!(text.contains("missing plural -s, article (a / the)"));
+    }
+
+    #[test]
+    fn error_in_a_200_response_is_readable() {
+        let body = r#"{"status":404,"error":{"message":"No endpoints found that support image input","code":404}}"#;
+        let parsed: ChatResponse = serde_json::from_str(body).unwrap();
+        assert!(parsed.choices.is_empty());
+        assert_eq!(
+            gateway_error_message(parsed.error.as_ref().unwrap()),
+            "No endpoints found that support image input"
+        );
+        let plain = serde_json::json!("Invalid API key");
+        assert_eq!(gateway_error_message(&plain), "Invalid API key");
     }
 
     #[test]

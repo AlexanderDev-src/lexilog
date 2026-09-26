@@ -119,7 +119,15 @@ impl ChatCompletionsReviewer {
                 429 => AppError::RateLimited(format!(
                     "the gateway's limit for {model} is reached ({snippet}); quotas reset at midnight"
                 )),
-                401 | 403 => AppError::Unavailable("the AI gateway rejected the API key".into()),
+                // The gateway answers 401 both for a bad key ("Invalid API
+                // key") and for an unknown model ("Invalid model"), so say
+                // what it said rather than guess.
+                401 | 403 => match refusal_reason(&body_text) {
+                    Some(reason) => {
+                        AppError::Unavailable(format!("the AI gateway refused {model}: {reason}"))
+                    }
+                    None => AppError::Unavailable("the AI gateway rejected the API key".into()),
+                },
                 _ => AppError::Unavailable(format!("the AI gateway answered {status}")),
             });
         }
@@ -386,6 +394,12 @@ struct ChatResponse {
     error: Option<serde_json::Value>,
 }
 
+/// The `error` of a refusal body such as `{"error":"Invalid model"}`.
+fn refusal_reason(body: &str) -> Option<String> {
+    let value: serde_json::Value = serde_json::from_str(body).ok()?;
+    value.get("error").map(gateway_error_message)
+}
+
 /// The readable part of a gateway error, whichever shape it came in.
 fn gateway_error_message(error: &serde_json::Value) -> String {
     let text = match error {
@@ -529,6 +543,19 @@ mod tests {
         let cut = capped("ก่อน", 4); // Thai letters are 3 bytes each
         assert!(cut.starts_with("ก…"));
         assert!(cut.ends_with("[cut, 12 bytes in total]"));
+    }
+
+    #[test]
+    fn refusals_say_why() {
+        assert_eq!(
+            refusal_reason(r#"{"error":"Invalid model"}"#).as_deref(),
+            Some("Invalid model")
+        );
+        assert_eq!(
+            refusal_reason(r#"{"error":{"message":"Invalid API key"}}"#).as_deref(),
+            Some("Invalid API key")
+        );
+        assert_eq!(refusal_reason("<html>Forbidden</html>"), None);
     }
 
     #[test]

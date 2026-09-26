@@ -37,19 +37,28 @@ impl AiFeedbackRepository for SqliteAiFeedbackRepository {
             .map(serde_json::to_string)
             .transpose()
             .map_err(|err| AppError::Internal(format!("feedback to json: {err}")))?;
+        let trace = call.trace;
+        // An empty request means nothing was sent; store NULL, not "".
+        let request = Some(trace.request_json.as_str()).filter(|r| !r.is_empty());
         let id = sqlx::query(
             "INSERT INTO ai_feedback
-                (version_id, model, result_json, with_image,
-                 input_tokens, output_tokens, created_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (version_id, model, result_json, with_image, input_tokens, output_tokens,
+                 created_at, request_json, raw_reply, http_status, duration_ms, attempts, error)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(call.version_id)
         .bind(call.model)
         .bind(json)
         .bind(call.with_image)
-        .bind(call.input_tokens)
-        .bind(call.output_tokens)
+        .bind(trace.input_tokens)
+        .bind(trace.output_tokens)
         .bind(timestamp(call.created_at))
+        .bind(request)
+        .bind(trace.raw_reply.as_deref())
+        .bind(trace.http_status)
+        .bind(trace.duration_ms)
+        .bind(trace.attempts)
+        .bind(call.error)
         .execute(&self.pool)
         .await?
         .last_insert_rowid();

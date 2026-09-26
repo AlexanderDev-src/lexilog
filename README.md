@@ -66,13 +66,40 @@ defaults point at the university gateway.
   key may be used elsewhere too, so a `429` from the gateway is the final word;
   the editor then offers another model with quota left.
 - One check costs roughly 2–3k tokens. Every call is stored in `ai_feedback`,
-  failed ones too, so the usage count stays honest.
+  failed ones too, so the usage count stays honest (see the AI call log below).
 - Task 1 charts: mark the models that can read images with `:vision`, e.g.
   `claude-sonnet-5:200000:vision`. Only those are sent the chart (about
   w × h / 750 tokens, ~850 for a 1024 px chart). With another model the
   editor warns that the model gets the text only.
 - The key stays on the server: the browser never sees it. `.env` is in
   `.gitignore`.
+
+### AI call log
+
+Each call writes one line to the server log, and one row with the full
+exchange to `ai_feedback`: the last request body, the gateway's raw reply,
+HTTP status, duration, number of requests (2 when a bad reply was retried)
+and the error, if any. Calls that fail before any feedback (quota reached,
+gateway down, key rejected) are logged too. The API key is never stored, and
+an image appears only as its type, size and SHA-256.
+
+```bash
+docker compose logs app | grep 'AI call'
+# AI call #12: claude-sonnet-5, version 3, with chart, HTTP 200, 1500 + 300 tokens, 12.4 s, 1 request: ok
+
+# The last 20 calls
+docker compose exec -T app sqlite3 -header -column /data/ielts.db \
+  "SELECT id, created_at, model, http_status AS http, duration_ms AS ms, attempts,
+          input_tokens + output_tokens AS tokens, error
+     FROM ai_feedback ORDER BY id DESC LIMIT 20"
+
+# What call 12 sent and what came back
+docker compose exec -T app sqlite3 /data/ielts.db "SELECT request_json FROM ai_feedback WHERE id = 12" | jq .
+docker compose exec -T app sqlite3 /data/ielts.db "SELECT raw_reply FROM ai_feedback WHERE id = 12" | jq .
+```
+
+The server log is lost when the container is recreated; the rows stay (and
+are in every backup). Rows are deleted with their writing version.
 
 ## Writing editor
 

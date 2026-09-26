@@ -6,7 +6,9 @@ use chrono_tz::Tz;
 use super::ports::{AiFeedbackRepository, MistakeRepository, WritingRepository, WritingReviewer};
 use crate::domain::calendar::{end_of_today, local_midnight, today};
 use crate::domain::error::{AppError, AppResult};
-use crate::domain::feedback::{AiCall, AiFeedbackRecord, AiStatus, ModelQuota, ReviewRequest};
+use crate::domain::feedback::{
+    AiCall, AiFeedbackRecord, AiStatus, CallTrace, ModelQuota, ReviewRequest,
+};
 
 /// A model the app may use, its daily token limit on the gateway, and
 /// whether it can read images.
@@ -152,38 +154,44 @@ impl AiFeedbackService {
             image,
         };
 
-        let outcome = reviewer.review(&model, &request).await?;
+        let outcome = reviewer.review(&model, &request).await;
 
-        // Store the call whether or not the reply was usable: the tokens count.
+        // Store every call, failed ones too: their tokens count towards the
+        // quota, and the AI log shows what went wrong.
         let now = Utc::now().trunc_subsecs(0);
+        let error = outcome.feedback.as_ref().err().map(ToString::to_string);
         let id = self
             .feedback
             .save(AiCall {
                 version_id,
                 model: &model,
                 feedback: outcome.feedback.as_ref().ok(),
+                error: error.as_deref(),
                 with_image,
-                input_tokens: outcome.input_tokens,
-                output_tokens: outcome.output_tokens,
+                trace: &outcome.trace,
                 created_at: now,
             })
             .await?;
-
-        match outcome.feedback {
-            Ok(feedback) => Ok(AiFeedbackRecord {
-                id,
-                version_id,
-                model,
-                feedback,
-                with_image,
-                input_tokens: outcome.input_tokens,
-                output_tokens: outcome.output_tokens,
-                created_at: now,
-            }),
-            Err(reason) => Err(AppError::Unavailable(format!(
-                "the model's reply could not be used ({reason}); try again or pick another model"
-            ))),
+        let summary = call_summary(id, &model, version_id, with_image, &outcome.trace);
+        match &error {
+            None => log::info!("{summary}: ok"),
+            Some(error) => log::warn!("{summary}: failed: {error}"),
         }
+
+        // `?` hands a failed call's error (quota, gateway, unusable reply) to
+        // the caller. Moving `feedback` out of `outcome` still leaves
+        // `outcome.trace` usable below.
+        let feedback = outcome.feedback?;
+        Ok(AiFeedbackRecord {
+            id,
+            version_id,
+            model,
+            feedback,
+            with_image,
+            input_tokens: outcome.trace.input_tokens,
+            output_tokens: outcome.trace.output_tokens,
+            created_at: now,
+        })
     }
 
     async fn usage_today(&self) -> AppResult<Vec<(String, i64)>> {
@@ -192,10 +200,68 @@ impl AiFeedbackService {
     }
 }
 
+/// The server-log line for one AI call (`docker compose logs app`), e.g.
+/// "AI call #12: claude-sonnet-5, version 3, with chart, HTTP 200,
+/// 1500 + 300 tokens, 12.4 s, 1 request". No essay text, no key.
+fn call_summary(
+    id: i64,
+    model: &str,
+    version_id: i64,
+    with_image: bool,
+    trace: &CallTrace,
+) -> String {
+    let chart = if with_image { ", with chart" } else { "" };
+    let status = match trace.http_status {
+        Some(code) => format!("HTTP {code}"),
+        None => "no answer".into(),
+    };
+    let requests = if trace.attempts == 1 {
+        "1 request".to_string()
+    } else {
+        format!("{} requests", trace.attempts)
+    };
+    format!(
+        "AI call #{id}: {model}, version {version_id}{chart}, {status}, {} + {} tokens, {:.1} s, {requests}",
+        trace.input_tokens,
+        trace.output_tokens,
+        trace.duration_ms as f64 / 1000.0,
+    )
+}
+
 fn used_by(usage: &[(String, i64)], model: &str) -> i64 {
     usage
         .iter()
         .find(|(id, _)| id == model)
         .map(|(_, tokens)| *tokens)
         .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn call_summary_reads_as_one_line() {
+        let trace = CallTrace {
+            input_tokens: 1500,
+            output_tokens: 300,
+            http_status: Some(200),
+            attempts: 1,
+            duration_ms: 12_400,
+            ..CallTrace::default()
+        };
+        assert_eq!(
+            call_summary(12, "claude-sonnet-5", 3, true, &trace),
+            "AI call #12: claude-sonnet-5, version 3, with chart, HTTP 200, 1500 + 300 tokens, 12.4 s, 1 request"
+        );
+        let unreachable = CallTrace {
+            attempts: 1,
+            duration_ms: 90_000,
+            ..CallTrace::default()
+        };
+        assert!(
+            call_summary(13, "m", 3, false, &unreachable)
+                .contains("m, version 3, no answer, 0 + 0 tokens, 90.0 s")
+        );
+    }
 }

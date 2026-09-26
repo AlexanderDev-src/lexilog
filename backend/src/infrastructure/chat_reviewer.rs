@@ -2,16 +2,17 @@
 //! such as the university gateway (gen.ai.kku.ac.th). The model is chosen per
 //! call, so every model the gateway offers works with this one adapter.
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 use crate::application::ports::WritingReviewer;
 use crate::domain::error::{AppError, AppResult};
-use crate::domain::feedback::{AiFeedback, ReviewOutcome, ReviewRequest};
+use crate::domain::feedback::{AiFeedback, CallTrace, ReviewOutcome, ReviewRequest};
 use crate::domain::image::StoredImage;
 use crate::domain::writing::WritingKind;
 
@@ -40,6 +41,9 @@ Reply with only this JSON object and nothing else:
 /// doesn't reserve quota.
 const MAX_TOKENS: u32 = 4000;
 
+/// Largest gateway response kept in the AI log.
+const MAX_LOGGED_REPLY: usize = 100_000;
+
 pub struct ChatCompletionsReviewer {
     client: reqwest::Client,
     url: String,
@@ -63,14 +67,25 @@ impl ChatCompletionsReviewer {
         })
     }
 
-    /// One request/response round trip.
-    async fn complete(&self, model: &str, messages: &[Message]) -> AppResult<Completion> {
+    /// One request/response round trip. Returns the model's reply text and
+    /// adds the tokens to `trace`. Whatever happens, `trace` ends up holding
+    /// what was sent and what came back, so failed calls can be looked at too.
+    async fn complete(
+        &self,
+        model: &str,
+        messages: &[Message],
+        trace: &mut CallTrace,
+    ) -> AppResult<String> {
         let body = ChatRequest {
             model,
             messages,
             max_tokens: MAX_TOKENS,
             temperature: 0.2,
         };
+        trace.attempts += 1;
+        trace.request_json = loggable_request(&body);
+        trace.raw_reply = None;
+        trace.http_status = None;
 
         let response = self
             .client
@@ -89,9 +104,16 @@ impl ChatCompletionsReviewer {
             })?;
 
         let status = response.status();
+        trace.http_status = Some(status.as_u16());
+        // Read the body as text first, so the log gets it exactly as it came.
+        let body_text = response.text().await.map_err(|err| {
+            log::warn!("AI gateway response could not be read: {err}");
+            AppError::Unavailable("the AI gateway's answer broke off".into())
+        })?;
+        trace.raw_reply = Some(capped(&body_text, MAX_LOGGED_REPLY));
+
         if !status.is_success() {
-            let text = response.text().await.unwrap_or_default();
-            let snippet: String = text.chars().take(200).collect();
+            let snippet: String = body_text.chars().take(200).collect();
             log::warn!("AI gateway answered {status}: {snippet}");
             return Err(match status.as_u16() {
                 429 => AppError::RateLimited(format!(
@@ -102,7 +124,7 @@ impl ChatCompletionsReviewer {
             });
         }
 
-        let parsed: ChatResponse = response.json().await.map_err(|err| {
+        let parsed: ChatResponse = serde_json::from_str(&body_text).map_err(|err| {
             log::warn!("unexpected AI gateway response: {err}");
             AppError::Unavailable("the AI gateway sent a response in an unexpected format".into())
         })?;
@@ -121,7 +143,7 @@ impl ChatCompletionsReviewer {
             )));
         }
 
-        let text = parsed
+        let reply = parsed
             .choices
             .into_iter()
             .next()
@@ -134,56 +156,106 @@ impl ChatCompletionsReviewer {
             Some(usage) => (usage.prompt_tokens, usage.completion_tokens),
             None => {
                 let sent: usize = messages.iter().map(|m| m.content.text_len()).sum();
-                ((sent / 4) as i64, (text.len() / 4) as i64)
+                ((sent / 4) as i64, (reply.len() / 4) as i64)
             }
         };
+        trace.input_tokens += input_tokens;
+        trace.output_tokens += output_tokens;
+        Ok(reply)
+    }
 
-        Ok(Completion {
-            text,
-            input_tokens,
-            output_tokens,
+    /// Asks once. If the reply isn't usable, shows the model its reply and
+    /// the problem, and asks once more; a second failure is reported.
+    async fn review_with_retry(
+        &self,
+        model: &str,
+        request: &ReviewRequest,
+        trace: &mut CallTrace,
+    ) -> AppResult<AiFeedback> {
+        let mut messages = vec![
+            Message::new("system", SYSTEM_PROMPT),
+            Message::with_image(&user_message(request), request.image.as_ref()),
+        ];
+
+        let first = self.complete(model, &messages, trace).await?;
+        let problem = match AiFeedback::from_model_reply(&first) {
+            Ok(feedback) => return Ok(feedback),
+            Err(problem) => problem,
+        };
+
+        log::warn!("AI reply unusable ({problem}); retrying once");
+        messages.push(Message::new("assistant", &first));
+        messages.push(Message::new(
+            "user",
+            &format!(
+                "That reply could not be used: {problem}. Reply again with only the JSON object in the required shape."
+            ),
+        ));
+        let second = self.complete(model, &messages, trace).await?;
+        AiFeedback::from_model_reply(&second).map_err(|reason| {
+            AppError::Unavailable(format!(
+                "the model's reply could not be used ({reason}); try again or pick another model"
+            ))
         })
     }
 }
 
 #[async_trait]
 impl WritingReviewer for ChatCompletionsReviewer {
-    async fn review(&self, model: &str, request: &ReviewRequest) -> AppResult<ReviewOutcome> {
-        let mut messages = vec![
-            Message::new("system", SYSTEM_PROMPT),
-            Message::with_image(&user_message(request), request.image.as_ref()),
-        ];
-
-        let first = self.complete(model, &messages).await?;
-        let mut input_tokens = first.input_tokens;
-        let mut output_tokens = first.output_tokens;
-
-        // If the reply isn't usable, show the model its reply and the problem,
-        // and ask once more. A second failure is reported to the user.
-        let feedback = match AiFeedback::from_model_reply(&first.text) {
-            Ok(feedback) => Ok(feedback),
-            Err(problem) => {
-                log::warn!("AI reply unusable ({problem}); retrying once");
-                messages.push(Message::new("assistant", &first.text));
-                messages.push(Message::new(
-                    "user",
-                    &format!(
-                        "That reply could not be used: {problem}. Reply again with only the JSON object in the required shape."
-                    ),
-                ));
-                let second = self.complete(model, &messages).await?;
-                input_tokens += second.input_tokens;
-                output_tokens += second.output_tokens;
-                AiFeedback::from_model_reply(&second.text)
-            }
-        };
-
-        Ok(ReviewOutcome {
-            feedback,
-            input_tokens,
-            output_tokens,
-        })
+    async fn review(&self, model: &str, request: &ReviewRequest) -> ReviewOutcome {
+        let started = Instant::now();
+        let mut trace = CallTrace::default();
+        let feedback = self.review_with_retry(model, request, &mut trace).await;
+        trace.duration_ms = started.elapsed().as_millis() as i64;
+        ReviewOutcome { feedback, trace }
     }
+}
+
+/// The request body for the AI log: the same JSON, except that each image's
+/// base64 data becomes its type, size and SHA-256. A row stays a few KB,
+/// and the hash still tells which image was sent.
+fn loggable_request(body: &ChatRequest) -> String {
+    let Ok(mut value) = serde_json::to_value(body) else {
+        return String::new();
+    };
+    if let Some(messages) = value["messages"].as_array_mut() {
+        let parts = messages
+            .iter_mut()
+            .filter_map(|message| message["content"].as_array_mut())
+            .flatten();
+        for part in parts {
+            if let Some(url) = part.pointer_mut("/image_url/url")
+                && let Some(described) = url.as_str().and_then(describe_data_url)
+            {
+                *url = described.into();
+            }
+        }
+    }
+    value.to_string()
+}
+
+/// "data:image/png;base64,iVBOR..." -> "[image/png, 49 KB, sha256 1a2b...]"
+fn describe_data_url(url: &str) -> Option<String> {
+    let (mime, data) = url.strip_prefix("data:")?.split_once(";base64,")?;
+    let bytes = BASE64.decode(data).ok()?;
+    let hash = Sha256::digest(&bytes);
+    Some(format!(
+        "[{mime}, {} KB, sha256 {hash:x}]",
+        bytes.len().div_ceil(1024)
+    ))
+}
+
+/// Keeps at most `max` bytes, cut at a character boundary. A gateway error
+/// page could in theory be huge; a real reply is a few KB.
+fn capped(text: &str, max: usize) -> String {
+    if text.len() <= max {
+        return text.to_string();
+    }
+    let mut end = max;
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}… [cut, {} bytes in total]", &text[..end], text.len())
 }
 
 /// The part of the prompt that changes per essay.
@@ -348,12 +420,6 @@ struct Usage {
     completion_tokens: i64,
 }
 
-struct Completion {
-    text: String,
-    input_tokens: i64,
-    output_tokens: i64,
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -429,6 +495,40 @@ mod tests {
         );
         let plain = serde_json::json!("Invalid API key");
         assert_eq!(gateway_error_message(&plain), "Invalid API key");
+    }
+
+    #[test]
+    fn logged_request_describes_the_image_instead_of_its_data() {
+        let image = StoredImage {
+            mime: "image/png".into(),
+            data: b"png".to_vec(),
+        };
+        let messages = [
+            Message::new("system", "Be kind."),
+            Message::with_image("Essay", Some(&image)),
+        ];
+        let body = ChatRequest {
+            model: "claude-sonnet-5",
+            messages: &messages,
+            max_tokens: 10,
+            temperature: 0.2,
+        };
+        let logged: serde_json::Value = serde_json::from_str(&loggable_request(&body)).unwrap();
+        // sha256 of "png", as `printf png | sha256sum` prints it.
+        assert_eq!(
+            logged["messages"][1]["content"][1]["image_url"]["url"],
+            "[image/png, 1 KB, sha256 8f8cbb7dcf46e0bc7d53265749a6c17d116093a6ba95e442764060c76fd4a86c]"
+        );
+        assert_eq!(logged["messages"][1]["content"][0]["text"], "Essay");
+        assert_eq!(logged["model"], "claude-sonnet-5");
+    }
+
+    #[test]
+    fn capped_cuts_at_a_character_boundary() {
+        assert_eq!(capped("short", 10), "short");
+        let cut = capped("ก่อน", 4); // Thai letters are 3 bytes each
+        assert!(cut.starts_with("ก…"));
+        assert!(cut.ends_with("[cut, 12 bytes in total]"));
     }
 
     #[test]

@@ -150,7 +150,9 @@ pub trait AiFeedbackRepository: Send + Sync {
 /// The AI model that reviews writing.
 #[async_trait]
 pub trait WritingReviewer: Send + Sync {
-    /// Errors: `RateLimited` when the gateway's daily quota is used up,
-    /// `Unavailable` when the gateway can't be reached or rejects the key.
-    async fn review(&self, model: &str, request: &ReviewRequest) -> AppResult<ReviewOutcome>;
+    /// Never fails as a whole: a failed review still has a trace to store.
+    /// `outcome.feedback` is `Err(RateLimited)` when the gateway's daily
+    /// quota is used up, and `Err(Unavailable)` when the gateway can't be
+    /// reached, rejects the key, or sends a reply that can't be used.
+    async fn review(&self, model: &str, request: &ReviewRequest) -> ReviewOutcome;
 }

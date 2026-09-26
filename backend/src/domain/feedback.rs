@@ -7,6 +7,7 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+use super::error::AppError;
 use super::image::StoredImage;
 use super::mistakes::normalize_tag;
 use super::writing::WritingKind;
@@ -132,29 +133,50 @@ pub struct ReviewRequest {
     pub image: Option<StoredImage>,
 }
 
-/// What one review cost, and its result. `feedback` is an `Err` with the
-/// reason when the model's reply could not be used even after a retry; the
-/// tokens were still spent and still count towards the quota.
-#[derive(Debug, Clone)]
+/// The result of one review, and a trace of the call. A review always has a
+/// trace, even when it failed: the tokens of a failed call still count
+/// towards the quota, and the AI log shows what went wrong.
+#[derive(Debug)]
 pub struct ReviewOutcome {
-    pub feedback: Result<AiFeedback, String>,
+    /// The feedback, or why there is none: the gateway refused or could not
+    /// be reached (`RateLimited`, `Unavailable`), or the reply could not be
+    /// used even after one retry.
+    pub feedback: Result<AiFeedback, AppError>,
+    pub trace: CallTrace,
+}
+
+/// What one call cost and what went over the wire, for the quota and the
+/// AI log. Holds neither the API key (it goes in a header, not the body)
+/// nor image data (the request shows a short description instead).
+#[derive(Debug, Clone, Default)]
+pub struct CallTrace {
     pub input_tokens: i64,
     pub output_tokens: i64,
+    /// The last request body sent, as JSON. Empty if nothing was sent.
+    pub request_json: String,
+    /// The gateway's last response body as received; `None` if none arrived.
+    pub raw_reply: Option<String>,
+    pub http_status: Option<u16>,
+    /// Requests made: 2 when the first reply was unusable and was retried.
+    pub attempts: u32,
+    /// The whole call, a retry included.
+    pub duration_ms: i64,
 }
 
 /// One call to the reviewer, as stored in `ai_feedback`.
 ///
-/// The `'a` lifetime says this struct only borrows `model` and `feedback`
+/// The `'a` lifetime says this struct only borrows its text and the trace
 /// from the caller for as long as it lives; nothing is copied.
 #[derive(Debug, Clone, Copy)]
 pub struct AiCall<'a> {
     pub version_id: i64,
     pub model: &'a str,
-    /// `None` when the reply could not be used.
+    /// `None` when the call failed or the reply could not be used.
     pub feedback: Option<&'a AiFeedback>,
+    /// Why there is no feedback; `None` when there is.
+    pub error: Option<&'a str>,
     pub with_image: bool,
-    pub input_tokens: i64,
-    pub output_tokens: i64,
+    pub trace: &'a CallTrace,
     pub created_at: DateTime<Utc>,
 }
 

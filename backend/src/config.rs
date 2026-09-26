@@ -74,15 +74,21 @@ impl Config {
     }
 }
 
-/// Parses `AI_MODELS`: "claude-sonnet-5:200000,deepseek-v4-pro:1000000".
-/// Model names contain `-` and `.`, so the limit is whatever follows the LAST `:`.
+/// Parses `AI_MODELS`: "claude-sonnet-5:200000:vision,deepseek-v4-pro:1000000".
+/// A trailing `:vision` marks a model that can read images (Task 1 charts).
+/// Model names contain `-` and `.`, so after taking off `:vision` the limit
+/// is whatever follows the LAST `:`.
 fn parse_models(text: &str) -> Result<Vec<ModelLimit>, String> {
     text.split(',')
         .map(str::trim)
         .filter(|item| !item.is_empty())
         .map(|item| {
-            let (id, limit) = item.rsplit_once(':').ok_or_else(|| {
-                format!("AI_MODELS: '{item}' should look like model:daily_tokens")
+            let (rest, vision) = match item.strip_suffix(":vision") {
+                Some(rest) => (rest, true),
+                None => (item, false),
+            };
+            let (id, limit) = rest.rsplit_once(':').ok_or_else(|| {
+                format!("AI_MODELS: '{item}' should look like model:daily_tokens or model:daily_tokens:vision")
             })?;
             let daily_limit = limit
                 .trim()
@@ -91,6 +97,7 @@ fn parse_models(text: &str) -> Result<Vec<ModelLimit>, String> {
             Ok(ModelLimit {
                 id: id.trim().to_string(),
                 daily_limit,
+                vision,
             })
         })
         .collect()
@@ -110,7 +117,18 @@ mod tests {
         assert_eq!(models.len(), 2);
         assert_eq!(models[1].id, "gemini-3.8-flash");
         assert_eq!(models[1].daily_limit, 350_000);
+        assert!(!models[1].vision);
         assert!(parse_models("claude-sonnet-5").is_err());
         assert!(parse_models("claude-sonnet-5:lots").is_err());
+    }
+
+    #[test]
+    fn vision_flag_is_optional() {
+        let models = parse_models("claude-sonnet-5:200000:vision,deepseek-v4-pro:1000000").unwrap();
+        assert_eq!(models[0].id, "claude-sonnet-5");
+        assert_eq!(models[0].daily_limit, 200_000);
+        assert!(models[0].vision);
+        assert!(!models[1].vision);
+        assert!(parse_models("claude-sonnet-5:vision").is_err());
     }
 }

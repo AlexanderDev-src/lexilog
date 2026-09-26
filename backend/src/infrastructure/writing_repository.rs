@@ -5,6 +5,7 @@ use sqlx::{AssertSqlSafe, FromRow, SqlitePool};
 use super::database::timestamp;
 use crate::application::ports::WritingRepository;
 use crate::domain::error::AppResult;
+use crate::domain::image::{ImageInfo, ImageMeta, StoredImage};
 use crate::domain::writing::{
     Piece, PieceSummary, PieceUpdate, Version, VersionUpdate, WritingKind,
 };
@@ -71,6 +72,15 @@ impl From<VersionRow> for Version {
     }
 }
 
+#[derive(FromRow)]
+struct ImageInfoRow {
+    mime: String,
+    width: i64,
+    height: i64,
+    bytes: i64,
+    created_at: DateTime<Utc>,
+}
+
 const SELECT_VERSION: &str = "
     SELECT id, piece_id, version_no, body, word_count, seconds_spent, feedback,
            created_at, updated_at
@@ -133,6 +143,22 @@ impl WritingRepository for SqliteWritingRepository {
             .fetch_all(&self.pool)
             .await?;
 
+        // The image's details only; its bytes are fetched on their own URL.
+        let image = sqlx::query_as::<_, ImageInfoRow>(
+            "SELECT mime, width, height, length(data) AS bytes, created_at
+               FROM piece_images WHERE piece_id = ?",
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await?
+        .map(|row| ImageInfo {
+            mime: row.mime,
+            width: row.width,
+            height: row.height,
+            bytes: row.bytes,
+            created_at: row.created_at,
+        });
+
         Ok(Some(Piece {
             id: row.id,
             kind: WritingKind::parse(&row.kind)?,
@@ -141,6 +167,7 @@ impl WritingRepository for SqliteWritingRepository {
             created_at: row.created_at,
             updated_at: row.updated_at,
             versions: versions.into_iter().map(Version::from).collect(),
+            image,
         }))
     }
 
@@ -309,6 +336,52 @@ impl WritingRepository for SqliteWritingRepository {
     async fn delete_version(&self, id: i64) -> AppResult<bool> {
         let result = sqlx::query("DELETE FROM writing_versions WHERE id = ?")
             .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    async fn save_image(
+        &self,
+        piece_id: i64,
+        meta: &ImageMeta,
+        data: &[u8],
+        now: DateTime<Utc>,
+    ) -> AppResult<bool> {
+        // INSERT ... SELECT inserts nothing when the piece doesn't exist, so
+        // no foreign-key error. ON CONFLICT replaces an earlier image.
+        let result = sqlx::query(
+            "INSERT INTO piece_images (piece_id, mime, width, height, data, created_at)
+             SELECT id, ?, ?, ?, ?, ? FROM writing_pieces WHERE id = ?
+             ON CONFLICT (piece_id) DO UPDATE
+                SET mime = excluded.mime, width = excluded.width,
+                    height = excluded.height, data = excluded.data,
+                    created_at = excluded.created_at",
+        )
+        .bind(meta.format.mime())
+        .bind(meta.width)
+        .bind(meta.height)
+        .bind(data)
+        .bind(timestamp(now))
+        .bind(piece_id)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    async fn get_image(&self, piece_id: i64) -> AppResult<Option<StoredImage>> {
+        let row = sqlx::query_as::<_, (String, Vec<u8>)>(
+            "SELECT mime, data FROM piece_images WHERE piece_id = ?",
+        )
+        .bind(piece_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.map(|(mime, data)| StoredImage { mime, data }))
+    }
+
+    async fn delete_image(&self, piece_id: i64) -> AppResult<bool> {
+        let result = sqlx::query("DELETE FROM piece_images WHERE piece_id = ?")
+            .bind(piece_id)
             .execute(&self.pool)
             .await?;
         Ok(result.rows_affected() > 0)

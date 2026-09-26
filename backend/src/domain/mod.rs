@@ -8,6 +8,7 @@ pub mod calendar;
 pub mod card;
 pub mod error;
 pub mod feedback;
+pub mod image;
 pub mod mistakes;
 pub mod practice;
 pub mod review;

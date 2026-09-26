@@ -10,10 +10,13 @@ export class ApiError extends Error {
 }
 
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
+  // A Blob (an image) is sent as raw bytes with its own type; anything else as JSON.
+  const headers =
+    body === undefined ? undefined : { 'content-type': body instanceof Blob ? body.type : 'application/json' };
   const res = await fetch(`/api${path}`, {
     method,
-    headers: body === undefined ? undefined : { 'content-type': 'application/json' },
-    body: body === undefined ? undefined : JSON.stringify(body),
+    headers,
+    body: body === undefined ? undefined : body instanceof Blob ? body : JSON.stringify(body),
   });
 
   if (!res.ok) {

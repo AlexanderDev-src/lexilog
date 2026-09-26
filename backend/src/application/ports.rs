@@ -15,9 +15,10 @@ use chrono::{DateTime, NaiveDate, Utc};
 use chrono_tz::Tz;
 
 use crate::domain::activity::DayActivity;
-use crate::domain::card::{Card, CardFilter, CardInput, DueBreakdown, TagCount};
+use crate::domain::card::{Card, CardFilter, CardInput, DeckWord, DueBreakdown, TagCount};
 use crate::domain::error::AppResult;
-use crate::domain::feedback::{AiFeedback, AiFeedbackRecord, ReviewOutcome, ReviewRequest};
+use crate::domain::feedback::{AiCall, AiFeedbackRecord, ReviewOutcome, ReviewRequest};
+use crate::domain::image::{ImageMeta, StoredImage};
 use crate::domain::mistakes::{
     MistakeCount, MistakeTagSummary, PeriodCount, PeriodWords, TrendBucket,
 };
@@ -37,6 +38,8 @@ pub trait CardRepository: Send + Sync {
     /// Returns `false` if the card does not exist.
     async fn delete(&self, id: i64) -> AppResult<bool>;
     async fn list_tags(&self) -> AppResult<Vec<TagCount>>;
+    /// Every card's id and word, alphabetical.
+    async fn words(&self) -> AppResult<Vec<DeckWord>>;
 
     /// Cards with `due < cutoff`, most overdue first.
     async fn due_before(&self, cutoff: DateTime<Utc>, limit: i64) -> AppResult<Vec<Card>>;
@@ -81,6 +84,18 @@ pub trait WritingRepository: Send + Sync {
         now: DateTime<Utc>,
     ) -> AppResult<bool>;
     async fn delete_version(&self, id: i64) -> AppResult<bool>;
+
+    /// Adds or replaces the piece's chart image. `false` if the piece does not exist.
+    async fn save_image(
+        &self,
+        piece_id: i64,
+        meta: &ImageMeta,
+        data: &[u8],
+        now: DateTime<Utc>,
+    ) -> AppResult<bool>;
+    async fn get_image(&self, piece_id: i64) -> AppResult<Option<StoredImage>>;
+    /// `false` if the piece had no image.
+    async fn delete_image(&self, piece_id: i64) -> AppResult<bool>;
 }
 
 /// The spaced-repetition algorithm. Plain (not async): it is pure maths.
@@ -124,17 +139,8 @@ pub trait MistakeRepository: Send + Sync {
 
 #[async_trait]
 pub trait AiFeedbackRepository: Send + Sync {
-    /// Stores one call. `feedback` is `None` when the reply was unusable.
-    /// Returns the new row's id.
-    async fn save(
-        &self,
-        version_id: i64,
-        model: &str,
-        feedback: Option<&AiFeedback>,
-        input_tokens: i64,
-        output_tokens: i64,
-        now: DateTime<Utc>,
-    ) -> AppResult<i64>;
+    /// Stores one call, usable or not. Returns the new row's id.
+    async fn save(&self, call: AiCall<'_>) -> AppResult<i64>;
     /// Successful reviews of any version of the piece, newest first.
     async fn for_piece(&self, piece_id: i64) -> AppResult<Vec<AiFeedbackRecord>>;
     /// Tokens used per model since `since`, failed calls included.

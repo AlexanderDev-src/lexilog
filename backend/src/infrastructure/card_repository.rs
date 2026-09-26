@@ -4,7 +4,7 @@ use sqlx::{AssertSqlSafe, FromRow, SqliteConnection, SqlitePool};
 
 use super::database::timestamp;
 use crate::application::ports::CardRepository;
-use crate::domain::card::{Card, CardFilter, CardInput, DueBreakdown, TagCount};
+use crate::domain::card::{Card, CardFilter, CardInput, DeckWord, DueBreakdown, TagCount};
 use crate::domain::error::{AppError, AppResult};
 use crate::domain::review::NewReviewLog;
 
@@ -248,6 +248,18 @@ impl CardRepository for SqliteCardRepository {
         Ok(rows
             .into_iter()
             .map(|(name, card_count)| TagCount { name, card_count })
+            .collect())
+    }
+
+    async fn words(&self) -> AppResult<Vec<DeckWord>> {
+        let rows = sqlx::query_as::<_, (i64, String)>(
+            "SELECT id, word FROM cards ORDER BY word COLLATE NOCASE, id",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows
+            .into_iter()
+            .map(|(id, word)| DeckWord { id, word })
             .collect())
     }
 

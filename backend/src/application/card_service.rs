@@ -3,7 +3,7 @@ use std::sync::Arc;
 use chrono::Utc;
 
 use super::ports::CardRepository;
-use crate::domain::card::{Card, CardFilter, CardInput, TagCount};
+use crate::domain::card::{Card, CardFilter, CardInput, DeckWord, TagCount};
 use crate::domain::error::{AppError, AppResult};
 
 /// Add, edit, search and delete vocabulary cards.
@@ -51,5 +51,9 @@ impl CardService {
 
     pub async fn tags(&self) -> AppResult<Vec<TagCount>> {
         self.repo.list_tags().await
+    }
+
+    pub async fn words(&self) -> AppResult<Vec<DeckWord>> {
+        self.repo.words().await
     }
 }

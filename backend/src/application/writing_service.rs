@@ -5,6 +5,7 @@ use chrono_tz::Tz;
 
 use super::ports::WritingRepository;
 use crate::domain::error::{AppError, AppResult};
+use crate::domain::image::{self, StoredImage};
 use crate::domain::writing::{
     NewPiece, Piece, PieceSummary, PieceUpdate, Version, VersionUpdate, word_count,
 };
@@ -99,6 +100,34 @@ impl WritingService {
             ));
         }
         self.repo.delete_version(id).await?;
+        Ok(())
+    }
+
+    /// Attaches a chart image to the piece, replacing any earlier one.
+    /// The bytes are checked first: PNG or WebP, within the size limits.
+    pub async fn set_image(&self, piece_id: i64, data: &[u8]) -> AppResult<Piece> {
+        let meta = image::inspect(data)?;
+        if !self
+            .repo
+            .save_image(piece_id, &meta, data, Utc::now())
+            .await?
+        {
+            return Err(AppError::NotFound("piece"));
+        }
+        self.get(piece_id).await
+    }
+
+    pub async fn image(&self, piece_id: i64) -> AppResult<StoredImage> {
+        self.repo
+            .get_image(piece_id)
+            .await?
+            .ok_or(AppError::NotFound("image"))
+    }
+
+    pub async fn delete_image(&self, piece_id: i64) -> AppResult<()> {
+        if !self.repo.delete_image(piece_id).await? {
+            return Err(AppError::NotFound("image"));
+        }
         Ok(())
     }
 }

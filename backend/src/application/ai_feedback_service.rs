@@ -6,13 +6,15 @@ use chrono_tz::Tz;
 use super::ports::{AiFeedbackRepository, MistakeRepository, WritingRepository, WritingReviewer};
 use crate::domain::calendar::{end_of_today, local_midnight, today};
 use crate::domain::error::{AppError, AppResult};
-use crate::domain::feedback::{AiFeedbackRecord, AiStatus, ModelQuota, ReviewRequest};
+use crate::domain::feedback::{AiCall, AiFeedbackRecord, AiStatus, ModelQuota, ReviewRequest};
 
-/// A model the app may use and its daily token limit on the gateway.
+/// A model the app may use, its daily token limit on the gateway, and
+/// whether it can read images.
 #[derive(Debug, Clone)]
 pub struct ModelLimit {
     pub id: String,
     pub daily_limit: i64,
+    pub vision: bool,
 }
 
 /// Below this many words there is nothing useful to review, so don't spend quota.
@@ -63,6 +65,7 @@ impl AiFeedbackService {
                 id: m.id.clone(),
                 daily_limit: m.daily_limit,
                 used_today: used_by(&usage, &m.id),
+                vision: m.vision,
             })
             .collect();
         Ok(AiStatus {
@@ -123,6 +126,15 @@ impl AiFeedbackService {
             )));
         }
 
+        // The chart goes along only if the model can read it. A text-only
+        // model still gets the essay; the editor has already warned about it.
+        let image = if limit.vision {
+            self.writing.get_image(piece.id).await?
+        } else {
+            None
+        };
+        let with_image = image.is_some();
+
         let known_tags = self
             .mistakes
             .tags()
@@ -137,6 +149,7 @@ impl AiFeedbackService {
             version_no: version.version_no,
             word_count: version.word_count,
             known_tags,
+            image,
         };
 
         let outcome = reviewer.review(&model, &request).await?;
@@ -145,14 +158,15 @@ impl AiFeedbackService {
         let now = Utc::now().trunc_subsecs(0);
         let id = self
             .feedback
-            .save(
+            .save(AiCall {
                 version_id,
-                &model,
-                outcome.feedback.as_ref().ok(),
-                outcome.input_tokens,
-                outcome.output_tokens,
-                now,
-            )
+                model: &model,
+                feedback: outcome.feedback.as_ref().ok(),
+                with_image,
+                input_tokens: outcome.input_tokens,
+                output_tokens: outcome.output_tokens,
+                created_at: now,
+            })
             .await?;
 
         match outcome.feedback {
@@ -161,6 +175,7 @@ impl AiFeedbackService {
                 version_id,
                 model,
                 feedback,
+                with_image,
                 input_tokens: outcome.input_tokens,
                 output_tokens: outcome.output_tokens,
                 created_at: now,

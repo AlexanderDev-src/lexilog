@@ -57,3 +57,9 @@ pub async fn tags(state: State<AppState>) -> Result<HttpResponse, AppError> {
     let tags = state.cards.tags().await?;
     Ok(HttpResponse::Ok().json(&tags))
 }
+
+/// GET /api/cards/words
+pub async fn words(state: State<AppState>) -> Result<HttpResponse, AppError> {
+    let words = state.cards.words().await?;
+    Ok(HttpResponse::Ok().json(&words))
+}

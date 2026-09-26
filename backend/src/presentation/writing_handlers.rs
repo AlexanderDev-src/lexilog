@@ -1,3 +1,5 @@
+use ntex::http::header;
+use ntex::util::Bytes;
 use ntex::web::HttpResponse;
 use ntex::web::types::{Json, Path, State};
 
@@ -70,5 +72,33 @@ pub async fn delete_version(
     id: Path<i64>,
 ) -> Result<HttpResponse, AppError> {
     state.writing.delete_version(id.into_inner()).await?;
+    Ok(HttpResponse::NoContent().finish())
+}
+
+/// PUT /api/pieces/{id}/image  body: the PNG or WebP bytes
+pub async fn put_image(
+    state: State<AppState>,
+    id: Path<i64>,
+    body: Bytes,
+) -> Result<HttpResponse, AppError> {
+    let piece = state.writing.set_image(id.into_inner(), &body).await?;
+    Ok(HttpResponse::Ok().json(&piece))
+}
+
+/// GET /api/pieces/{id}/image
+pub async fn get_image(state: State<AppState>, id: Path<i64>) -> Result<HttpResponse, AppError> {
+    let image = state.writing.image(id.into_inner()).await?;
+    Ok(HttpResponse::Ok()
+        .content_type(image.mime)
+        // The editor adds ?v=<upload time> to the URL, so a replaced image
+        // gets a new URL; still, ask the browser to check every time.
+        .header(header::CACHE_CONTROL, "no-cache")
+        .header(header::X_CONTENT_TYPE_OPTIONS, "nosniff")
+        .body(image.data))
+}
+
+/// DELETE /api/pieces/{id}/image
+pub async fn delete_image(state: State<AppState>, id: Path<i64>) -> Result<HttpResponse, AppError> {
+    state.writing.delete_image(id.into_inner()).await?;
     Ok(HttpResponse::NoContent().finish())
 }

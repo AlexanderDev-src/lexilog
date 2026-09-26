@@ -10,7 +10,7 @@ mod practice_handlers;
 mod review_handlers;
 mod writing_handlers;
 
-use ntex::web::{self, HttpResponse};
+use ntex::web::{self, HttpResponse, types::PayloadConfig};
 
 use crate::application::ai_feedback_service::AiFeedbackService;
 use crate::application::card_service::CardService;
@@ -19,6 +19,7 @@ use crate::application::mistake_service::MistakeService;
 use crate::application::practice_service::PracticeService;
 use crate::application::review_service::ReviewService;
 use crate::application::writing_service::WritingService;
+use crate::domain::image::MAX_IMAGE_BYTES;
 
 /// Everything the handlers need. Each ntex worker thread gets its own clone;
 /// the clones are cheap because the services only hold `Arc`s.
@@ -38,7 +39,9 @@ pub fn api_routes(cfg: &mut web::ServiceConfig) {
     cfg.service(
         web::scope("/api")
             .service(web::resource("/health").route(web::get().to(health)))
-            // Vocabulary
+            // Vocabulary. "/cards/words" comes before "/cards/{id}" so that
+            // "words" isn't read as an id.
+            .service(web::resource("/cards/words").route(web::get().to(card_handlers::words)))
             .service(
                 web::resource("/cards")
                     .route(web::get().to(card_handlers::list))
@@ -67,6 +70,16 @@ pub fn api_routes(cfg: &mut web::ServiceConfig) {
                     .route(web::get().to(writing_handlers::get))
                     .route(web::put().to(writing_handlers::update))
                     .route(web::delete().to(writing_handlers::delete)),
+            )
+            .service(
+                web::resource("/pieces/{id}/image")
+                    // Raw image bytes; the default body limit is 256 KB.
+                    // One extra KB so the domain check reports "too large"
+                    // with a clear message instead of the framework's error.
+                    .state(PayloadConfig::new(MAX_IMAGE_BYTES + 1024))
+                    .route(web::get().to(writing_handlers::get_image))
+                    .route(web::put().to(writing_handlers::put_image))
+                    .route(web::delete().to(writing_handlers::delete_image)),
             )
             .service(
                 web::resource("/pieces/{id}/versions")

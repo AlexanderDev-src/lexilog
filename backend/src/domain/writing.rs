@@ -2,6 +2,7 @@ use chrono::{DateTime, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 
 use super::error::{AppError, AppResult};
+use super::image::ImageInfo;
 
 /// The type of writing piece. In JSON: "task1", "task2" or "paragraph".
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -44,6 +45,8 @@ pub struct Piece {
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub versions: Vec<Version>,
+    /// The attached chart (Task 1), without its bytes.
+    pub image: Option<ImageInfo>,
 }
 
 /// One row in the writing list.

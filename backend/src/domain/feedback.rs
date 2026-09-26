@@ -7,6 +7,7 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+use super::image::StoredImage;
 use super::mistakes::normalize_tag;
 use super::writing::WritingKind;
 
@@ -127,6 +128,8 @@ pub struct ReviewRequest {
     pub word_count: i64,
     /// The learner's existing mistake tags, so the model reuses them.
     pub known_tags: Vec<String>,
+    /// The piece's chart, only when the model can read images.
+    pub image: Option<StoredImage>,
 }
 
 /// What one review cost, and its result. `feedback` is an `Err` with the
@@ -139,6 +142,22 @@ pub struct ReviewOutcome {
     pub output_tokens: i64,
 }
 
+/// One call to the reviewer, as stored in `ai_feedback`.
+///
+/// The `'a` lifetime says this struct only borrows `model` and `feedback`
+/// from the caller for as long as it lives; nothing is copied.
+#[derive(Debug, Clone, Copy)]
+pub struct AiCall<'a> {
+    pub version_id: i64,
+    pub model: &'a str,
+    /// `None` when the reply could not be used.
+    pub feedback: Option<&'a AiFeedback>,
+    pub with_image: bool,
+    pub input_tokens: i64,
+    pub output_tokens: i64,
+    pub created_at: DateTime<Utc>,
+}
+
 /// A stored, successful review.
 #[derive(Debug, Clone, Serialize)]
 pub struct AiFeedbackRecord {
@@ -146,6 +165,8 @@ pub struct AiFeedbackRecord {
     pub version_id: i64,
     pub model: String,
     pub feedback: AiFeedback,
+    /// Whether the model saw the chart image.
+    pub with_image: bool,
     pub input_tokens: i64,
     pub output_tokens: i64,
     pub created_at: DateTime<Utc>,
@@ -157,6 +178,8 @@ pub struct ModelQuota {
     pub id: String,
     pub daily_limit: i64,
     pub used_today: i64,
+    /// Can read images (marked `:vision` in AI_MODELS).
+    pub vision: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]

@@ -11,6 +11,8 @@
     version: Version;
     /** Live word count of the editor. */
     words: number;
+    /** The piece has a chart image attached. */
+    hasImage: boolean;
     /** Saves the editor's text, so the model sees the latest version. */
     beforeReview: () => Promise<void>;
     /** Selects the quoted words in the editor. */
@@ -19,7 +21,7 @@
     onapplytags: (counts: MistakeCount[]) => void;
   }
 
-  let { pieceId, version, words, beforeReview, onselectquote, onapplytags }: Props = $props();
+  let { pieceId, version, words, hasImage, beforeReview, onselectquote, onapplytags }: Props = $props();
 
   const MIN_WORDS = 30;
 
@@ -44,6 +46,8 @@
     }
     return [...counts].map(([tag, count]) => ({ tag, count }));
   });
+
+  const chosen = $derived(status?.models.find((m) => m.id === model) ?? null);
 
   // After a 429 on one model, offer another that still has quota left.
   const fallback = $derived(status?.models.find((m) => m.id !== model && m.used_today < m.daily_limit) ?? null);
@@ -106,7 +110,9 @@
       <span class="visually-hidden">Model</span>
       <select bind:value={model} disabled={running}>
         {#each status.models as m (m.id)}
-          <option value={m.id}>{m.id} · {formatTokens(m.used_today)} / {formatTokens(m.daily_limit)} today</option>
+          <option value={m.id}>
+            {m.id}{m.vision ? ' (reads images)' : ''} · {formatTokens(m.used_today)} / {formatTokens(m.daily_limit)} today
+          </option>
         {/each}
       </select>
     </label>
@@ -114,6 +120,15 @@
       {running ? 'Checking…' : shown ? 'Check again' : 'Get AI feedback'}
     </button>
   </div>
+  {#if hasImage && chosen}
+    {#if chosen.vision}
+      <p class="muted small">The chart is sent along, so the model can check your figures.</p>
+    {:else}
+      <p class="warn small">
+        {chosen.id} can't read images: it gets your text only and won't check your figures against the chart.
+      </p>
+    {/if}
+  {/if}
   {#if running}
     <p class="muted small">The model is reading v{version.version_no}. This takes 10–30 seconds.</p>
   {:else if words < MIN_WORDS}
@@ -183,7 +198,11 @@
       {/if}
 
       <div class="row wrap meta muted small">
-        <span>{shown.model} · {formatTime(shown.created_at)} · {formatTokens(shown.input_tokens + shown.output_tokens)} tokens</span>
+        <span>
+          {shown.model} · {formatTime(shown.created_at)} · {formatTokens(shown.input_tokens + shown.output_tokens)} tokens{shown.with_image
+            ? ' · with chart'
+            : ''}
+        </span>
         {#if forVersion.length > 1}
           <label class="inline">
             Earlier:
@@ -208,7 +227,17 @@
 
 <style>
   .controls select {
-    max-width: 22rem;
+    flex: 1;
+    min-width: 0;
+    max-width: 100%;
+  }
+  .controls label {
+    flex: 1;
+    min-width: 12rem;
+  }
+  .warn {
+    margin: 0;
+    color: var(--amber);
   }
   .inline {
     display: flex;

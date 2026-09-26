@@ -5,11 +5,14 @@
 use std::time::Duration;
 
 use async_trait::async_trait;
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD as BASE64;
 use serde::{Deserialize, Serialize};
 
 use crate::application::ports::WritingReviewer;
 use crate::domain::error::{AppError, AppResult};
 use crate::domain::feedback::{AiFeedback, ReviewOutcome, ReviewRequest};
+use crate::domain::image::StoredImage;
 use crate::domain::writing::WritingKind;
 
 const SYSTEM_PROMPT: &str = r#"You are an experienced IELTS Academic Writing examiner helping a learner improve their own writing.
@@ -130,7 +133,7 @@ impl ChatCompletionsReviewer {
         let (input_tokens, output_tokens) = match parsed.usage {
             Some(usage) => (usage.prompt_tokens, usage.completion_tokens),
             None => {
-                let sent: usize = messages.iter().map(|m| m.content.len()).sum();
+                let sent: usize = messages.iter().map(|m| m.content.text_len()).sum();
                 ((sent / 4) as i64, (text.len() / 4) as i64)
             }
         };
@@ -148,7 +151,7 @@ impl WritingReviewer for ChatCompletionsReviewer {
     async fn review(&self, model: &str, request: &ReviewRequest) -> AppResult<ReviewOutcome> {
         let mut messages = vec![
             Message::new("system", SYSTEM_PROMPT),
-            Message::new("user", &user_message(request)),
+            Message::with_image(&user_message(request), request.image.as_ref()),
         ];
 
         let first = self.complete(model, &messages).await?;
@@ -202,8 +205,19 @@ fn user_message(request: &ReviewRequest) -> String {
     } else {
         request.known_tags.join(", ")
     };
+    // Task 1 describes a chart. Without the image the model must not guess
+    // whether the learner's numbers are right.
+    let chart = match (request.kind, request.image.is_some()) {
+        (_, true) => {
+            "\n\nThe chart for this task is attached as an image. Check the learner's figures, comparisons and overview against it."
+        }
+        (WritingKind::Task1, false) => {
+            "\n\nYou cannot see the chart for this task. Do not judge whether the figures are correct; judge the language, the structure and whether there is a clear overview."
+        }
+        _ => "",
+    };
     format!(
-        "{task}\n\nQuestion:\n{question}\n\nEssay (version {}, {} words):\n{}\n\nLearner's existing mistake tags: {tags}",
+        "{task}\n\nQuestion:\n{question}{chart}\n\nEssay (version {}, {} words):\n{}\n\nLearner's existing mistake tags: {tags}",
         request.version_no, request.word_count, request.essay
     )
 }
@@ -221,14 +235,72 @@ struct ChatRequest<'a> {
 #[derive(Serialize)]
 struct Message {
     role: String,
-    content: String,
+    content: Content,
+}
+
+/// A message is either plain text or, when an image goes along, a list of
+/// parts. `untagged` writes each variant as its bare value: a string, or
+/// an array of parts.
+#[derive(Serialize)]
+#[serde(untagged)]
+enum Content {
+    Text(String),
+    Parts(Vec<Part>),
+}
+
+impl Content {
+    /// Characters of text, for estimating tokens when the gateway reports none.
+    fn text_len(&self) -> usize {
+        match self {
+            Content::Text(text) => text.len(),
+            Content::Parts(parts) => parts
+                .iter()
+                .map(|part| match part {
+                    Part::Text { text } => text.len(),
+                    Part::ImageUrl { .. } => 0,
+                })
+                .sum(),
+        }
+    }
+}
+
+/// `tag = "type"` adds `"type": "text"` or `"type": "image_url"` to each
+/// part, which is the shape the chat/completions API expects:
+/// `{"type":"image_url","image_url":{"url":"data:image/png;base64,..."}}`.
+#[derive(Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum Part {
+    Text { text: String },
+    ImageUrl { image_url: ImageUrl },
+}
+
+#[derive(Serialize)]
+struct ImageUrl {
+    url: String,
 }
 
 impl Message {
     fn new(role: &str, content: &str) -> Self {
         Self {
             role: role.into(),
-            content: content.into(),
+            content: Content::Text(content.into()),
+        }
+    }
+
+    /// A user message, with the image (as a data URL) after the text if there is one.
+    fn with_image(text: &str, image: Option<&StoredImage>) -> Self {
+        let Some(image) = image else {
+            return Self::new("user", text);
+        };
+        let url = format!("data:{};base64,{}", image.mime, BASE64.encode(&image.data));
+        Self {
+            role: "user".into(),
+            content: Content::Parts(vec![
+                Part::Text { text: text.into() },
+                Part::ImageUrl {
+                    image_url: ImageUrl { url },
+                },
+            ]),
         }
     }
 }
@@ -295,12 +367,55 @@ mod tests {
             version_no: 2,
             word_count: 5,
             known_tags: vec!["missing plural -s".into(), "article (a / the)".into()],
+            image: None,
         };
         let text = user_message(&request);
         assert!(text.contains("Task 2 (at least 250 words"));
         assert!(text.contains("Do universities focus too much on jobs?"));
         assert!(text.contains("Essay (version 2, 5 words):\nUniversities play a key role."));
         assert!(text.contains("missing plural -s, article (a / the)"));
+        assert!(!text.contains("chart"));
+    }
+
+    #[test]
+    fn task1_says_whether_the_chart_is_attached() {
+        let mut request = ReviewRequest {
+            kind: WritingKind::Task1,
+            prompt: "The chart shows rainfall.".into(),
+            essay: "Rainfall rose.".into(),
+            version_no: 1,
+            word_count: 2,
+            known_tags: vec![],
+            image: None,
+        };
+        assert!(user_message(&request).contains("You cannot see the chart"));
+        request.image = Some(StoredImage {
+            mime: "image/png".into(),
+            data: vec![1, 2, 3],
+        });
+        assert!(user_message(&request).contains("attached as an image"));
+    }
+
+    #[test]
+    fn image_is_sent_as_a_data_url_part() {
+        let image = StoredImage {
+            mime: "image/png".into(),
+            data: b"png".to_vec(),
+        };
+        let json = serde_json::to_value(Message::with_image("Essay", Some(&image))).unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!({
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Essay"},
+                    {"type": "image_url", "image_url": {"url": "data:image/png;base64,cG5n"}}
+                ]
+            })
+        );
+        // Without an image the content stays a plain string.
+        let json = serde_json::to_value(Message::with_image("Essay", None)).unwrap();
+        assert_eq!(json["content"], "Essay");
     }
 
     #[test]

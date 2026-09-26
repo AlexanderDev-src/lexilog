@@ -1,14 +1,19 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import { cardsApi } from '../lib/api/cards';
   import { writingApi } from '../lib/api/writing';
   import AiFeedbackPanel from '../lib/components/AiFeedbackPanel.svelte';
+  import ChartImage from '../lib/components/ChartImage.svelte';
+  import DeckWordsPanel from '../lib/components/DeckWordsPanel.svelte';
+  import HighlightTextarea, { type Mark } from '../lib/components/HighlightTextarea.svelte';
   import Icon from '../lib/components/Icon.svelte';
   import MistakeEditor from '../lib/components/MistakeEditor.svelte';
   import Timer from '../lib/components/Timer.svelte';
   import VersionDiff from '../lib/components/VersionDiff.svelte';
-  import { countWords, formatTime, PRESETS } from '../lib/format';
+  import { buildMatcher, sentenceAround } from '../lib/deckWords';
+  import { countWords, formatDate, formatTime, PRESETS } from '../lib/format';
   import { navigate } from '../lib/router.svelte';
-  import type { MistakeCount, Piece, Version, WritingKind } from '../lib/types';
+  import type { DeckWord, MistakeCount, Piece, Version, WritingKind } from '../lib/types';
 
   let { id }: { id: string } = $props();
 
@@ -21,8 +26,28 @@
   let feedback = $state(''); // pasted feedback for this version
   let elapsed = $state(0); // timer seconds for this version
   let essay: HTMLTextAreaElement | undefined = $state();
+  let highlighter: ReturnType<typeof HighlightTextarea> | undefined = $state();
+  let feedbackBox: HTMLTextAreaElement | undefined = $state();
+  let aiPane: HTMLDivElement | undefined = $state();
   // The mistake editor component, so the AI panel can add tags to it.
   let mistakeEditor: ReturnType<typeof MistakeEditor> | undefined = $state();
+
+  // Deck words: underlined in the essay, listed in the side panel.
+  let deck = $state<DeckWord[]>([]);
+  const matcher = $derived(buildMatcher(deck));
+  const deckMatches = $derived(matcher(body));
+  // The quote an AI issue points at, shaded until the text changes.
+  let focus = $state<{ start: number; end: number } | null>(null);
+  const marks = $derived<Mark[]>([
+    ...deckMatches.map((m) => ({ start: m.start, end: m.end, kind: 'deck' as const })),
+    ...(focus ? [{ ...focus, kind: 'focus' as const }] : []),
+  ]);
+  // A word or phrase selected in the essay or its feedback, offered for the deck.
+  let picked = $state<{ text: string; sentence: string; from: 'essay' | 'feedback' } | null>(null);
+
+  // Side panel tab, remembered between visits.
+  type Tab = 'ai' | 'feedback' | 'mistakes';
+  let tab = $state<Tab>(savedTab());
 
   type SaveState = 'saved' | 'dirty' | 'saving' | 'error';
   let saveState = $state<SaveState>('saved');
@@ -48,14 +73,22 @@
       if (saveState !== 'saved') event.preventDefault();
     };
     window.addEventListener('beforeunload', beforeUnload);
+    // Selecting text in the AI feedback offers it for the deck.
+    document.addEventListener('selectionchange', offerFromAiPane);
     return () => {
       window.removeEventListener('beforeunload', beforeUnload);
+      document.removeEventListener('selectionchange', offerFromAiPane);
       // Leaving the page inside the app: save whatever is pending.
       if (saveState === 'dirty') saveBody();
     };
   });
 
   async function load() {
+    // The deck is extra: if it fails to load, the editor still works.
+    cardsApi
+      .words()
+      .then((words) => (deck = words))
+      .catch(() => {});
     try {
       piece = await writingApi.get(Number(id));
       const last = piece.versions.at(-1);
@@ -73,6 +106,8 @@
     saveState = 'saved';
     savedAt = version.updated_at;
     comparing = false;
+    focus = null;
+    picked = null;
   }
 
   async function switchTo(version: Version) {
@@ -85,6 +120,7 @@
 
   // Typing in the essay or the feedback box: save 1 s after the last keystroke.
   function onBodyInput() {
+    focus = null; // the shaded quote may have moved
     saveState = 'dirty';
     clearTimeout(saveTimer);
     saveTimer = setTimeout(saveBody, 1000); // 1 s after the last keystroke
@@ -124,12 +160,76 @@
       return;
     }
     error = '';
-    essay.focus();
+    focus = { start, end: start + quote.length };
+    essay.focus({ preventScroll: true });
     essay.setSelectionRange(start, start + quote.length);
-    // Scroll the textarea so the selection is visible (roughly by line).
-    const line = body.slice(0, start).split('\n').length;
-    const lineHeight = parseFloat(getComputedStyle(essay).lineHeight) || 28;
-    essay.scrollTop = Math.max(0, (line - 3) * lineHeight);
+    highlighter?.revealFocus();
+  }
+
+  // ---- deck words ------------------------------------------------------
+
+  /**
+   * Offers a selection for the deck: trims spaces and punctuation around it,
+   * and ignores anything longer than a short phrase (6 words, 60 characters),
+   * so selecting a paragraph to cut it doesn't pop up the form.
+   */
+  function offer(text: string, start: number, end: number, from: 'essay' | 'feedback') {
+    const raw = text.slice(start, end);
+    const lead = raw.length - raw.replace(/^[\s"'“‘(,.;:!?]+/u, '').length;
+    const trail = raw.length - raw.replace(/[\s"'”’),.;:!?]+$/u, '').length;
+    const word = raw.slice(lead, raw.length - trail);
+    if (!word || word.length > 60 || word.split(/\s+/).length > 6 || !/\p{L}/u.test(word)) return;
+    picked = { text: word, sentence: sentenceAround(text, start + lead, end - trail), from };
+  }
+
+  function offerFromTextarea(box: HTMLTextAreaElement | undefined, from: 'essay' | 'feedback') {
+    if (!box || box.selectionStart === box.selectionEnd) return;
+    // Clicking an AI issue selects its quote; that isn't a word to learn.
+    if (from === 'essay' && focus?.start === box.selectionStart && focus.end === box.selectionEnd) return;
+    offer(box.value, box.selectionStart, box.selectionEnd, from);
+  }
+
+  /** A selection in the AI feedback (normal page text, not a textarea). */
+  function offerFromAiPane() {
+    const selection = window.getSelection();
+    if (!selection || selection.isCollapsed || !aiPane?.contains(selection.anchorNode)) return;
+    const text = selection.toString();
+    // The sentence comes from the element the selection sits in (a hint, the summary...).
+    const block = selection.anchorNode?.parentElement?.closest('p, li, span, button');
+    const context = block?.textContent ?? text;
+    const at = context.indexOf(text);
+    if (at < 0) offer(text, 0, text.length, 'feedback');
+    else offer(context, at, at + text.length, 'feedback');
+  }
+
+  function addedToDeck(word: DeckWord) {
+    deck = [...deck, word];
+    picked = null;
+  }
+
+  const cardSource = $derived.by(() => {
+    if (!piece) return '';
+    const where = `${PRESETS[piece.kind].label}, ${formatDate(piece.written_on)}`;
+    return picked?.from === 'feedback' ? `Feedback on my writing (${where})` : `My writing (${where})`;
+  });
+
+  function savedTab(): Tab {
+    try {
+      const value = localStorage.getItem('writing-tab');
+      if (value === 'ai' || value === 'feedback' || value === 'mistakes') return value;
+    } catch {
+      // storage blocked: use the default
+    }
+    return 'ai';
+  }
+
+  function showTab(next: Tab) {
+    tab = next;
+    try {
+      localStorage.setItem('writing-tab', next);
+    } catch {
+      // not remembered, that's fine
+    }
   }
 
   function applyTags(counts: MistakeCount[]) {
@@ -198,6 +298,15 @@
 
   const KINDS: WritingKind[] = ['task1', 'task2', 'paragraph'];
 
+  const SIDE_TABS: { id: Tab; label: string }[] = [
+    { id: 'ai', label: 'AI feedback' },
+    { id: 'feedback', label: 'Feedback' },
+    { id: 'mistakes', label: 'Mistakes' },
+  ];
+
+  // Task 1 describes a chart. Other kinds show it only if one was attached.
+  const showChart = $derived(piece !== null && (piece.kind === 'task1' || piece.image !== null));
+
   /** "v2 · 187 words · 23 min" for the compare headers. */
   function versionMeta(v: Version): string {
     const secs = v.seconds_spent ?? 0;
@@ -214,27 +323,32 @@
 {#if error}<p class="error">{error}</p>{/if}
 
 {#if piece}
-  <header class="piece-head">
-    <div class="meta-row">
-      <label class="visually-hidden" for="kind">Type</label>
-      <select id="kind" class="kind" bind:value={piece.kind} onchange={saveDetails}>
-        {#each KINDS as kind (kind)}<option value={kind}>{PRESETS[kind].label}</option>{/each}
-      </select>
-      <label class="visually-hidden" for="written-on">Date</label>
-      <input id="written-on" class="date" type="date" bind:value={piece.written_on} onchange={saveDetails} />
-      {#if preset.minutes}
-        <span class="eyebrow">{preset.minutes} min · {preset.minWords} words</span>
-      {/if}
+  <header class="piece-head" class:with-chart={showChart}>
+    <div class="head-text">
+      <div class="meta-row">
+        <label class="visually-hidden" for="kind">Type</label>
+        <select id="kind" class="kind" bind:value={piece.kind} onchange={saveDetails}>
+          {#each KINDS as kind (kind)}<option value={kind}>{PRESETS[kind].label}</option>{/each}
+        </select>
+        <label class="visually-hidden" for="written-on">Date</label>
+        <input id="written-on" class="date" type="date" bind:value={piece.written_on} onchange={saveDetails} />
+        {#if preset.minutes}
+          <span class="eyebrow">{preset.minutes} min · {preset.minWords} words</span>
+        {/if}
+      </div>
+      <label class="visually-hidden" for="prompt">Question / prompt</label>
+      <textarea
+        id="prompt"
+        class="prompt"
+        bind:value={piece.prompt}
+        onblur={saveDetails}
+        rows="2"
+        placeholder="Paste the task question here"
+      ></textarea>
     </div>
-    <label class="visually-hidden" for="prompt">Question / prompt</label>
-    <textarea
-      id="prompt"
-      class="prompt"
-      bind:value={piece.prompt}
-      onblur={saveDetails}
-      rows="2"
-      placeholder="Paste the task question here"
-    ></textarea>
+    {#if showChart}
+      <ChartImage pieceId={piece.id} image={piece.image} onchange={(image) => piece && (piece.image = image)} />
+    {/if}
   </header>
 
   <div class="toolbar">
@@ -317,16 +431,17 @@
       <div class="main-col">
         <article class="essay-card">
           <label class="visually-hidden" for="essay">Essay, version {active.version_no}</label>
-          <textarea
+          <HighlightTextarea
             id="essay"
-            class="essay"
-            bind:this={essay}
+            bind:this={highlighter}
+            bind:textarea={essay}
             bind:value={body}
+            {marks}
             oninput={onBodyInput}
             onblur={saveBody}
+            onselect={() => offerFromTextarea(essay, 'essay')}
             placeholder="Start writing…"
-            spellcheck="true"
-          ></textarea>
+          />
           {#if piece.versions.length > 1}
             <div class="essay-foot">
               <span class="muted small">
@@ -336,45 +451,83 @@
             </div>
           {/if}
         </article>
-
-        <section class="panel">
-          <h2><Icon name="sparkle" size={18} /> AI feedback on v{active.version_no}</h2>
-          {#key active.id}
-            <AiFeedbackPanel
-              pieceId={piece.id}
-              version={active}
-              {words}
-              beforeReview={saveBody}
-              onselectquote={selectQuote}
-              onapplytags={applyTags}
-            />
-          {/key}
-        </section>
       </div>
 
+      <!-- Sticky beside the essay, so feedback and text are on screen together. -->
       <aside class="rail">
-        <section class="panel feedback-panel">
-          <div class="row spread">
-            <h2>Feedback on v{active.version_no}</h2>
-            <span class="eyebrow">pasted</span>
-          </div>
-          <label class="visually-hidden" for="feedback">Feedback on version {active.version_no}</label>
-          <textarea
-            id="feedback"
-            class="feedback"
-            bind:value={feedback}
-            oninput={onBodyInput}
-            onblur={saveBody}
-            placeholder="Paste feedback from a teacher, an AI chat, or your own notes"
-          ></textarea>
-        </section>
+        <DeckWordsPanel
+          matches={deckMatches}
+          {matcher}
+          {picked}
+          source={cardSource}
+          onadded={addedToDeck}
+          ondismiss={() => (picked = null)}
+        />
 
-        <section class="panel">
-          <div class="row spread">
-            <h2>Mistakes in this piece</h2>
-            <a class="small link" href="#/mistakes">Trend →</a>
+        <section class="panel side">
+          <div class="side-tabs" role="tablist" aria-label="Feedback and mistakes">
+            {#each SIDE_TABS as t (t.id)}
+              <button
+                type="button"
+                role="tab"
+                id="side-tab-{t.id}"
+                aria-controls="side-panel-{t.id}"
+                aria-selected={tab === t.id}
+                class:active={tab === t.id}
+                onclick={() => showTab(t.id)}
+              >
+                {#if t.id === 'ai'}<Icon name="sparkle" size={16} />{/if}
+                {t.label}
+                {#if t.id === 'feedback' && feedback.trim()}<i class="dot" aria-label="has text"></i>{/if}
+              </button>
+            {/each}
           </div>
-          <MistakeEditor bind:this={mistakeEditor} pieceId={piece.id} />
+
+          <!-- All three stay mounted (just hidden), so the AI panel can add
+               tags to the mistake editor while another tab is showing. -->
+          <div
+            role="tabpanel"
+            id="side-panel-ai"
+            aria-labelledby="side-tab-ai"
+            hidden={tab !== 'ai'}
+            bind:this={aiPane}
+          >
+            <p class="eyebrow tab-note">On v{active.version_no}</p>
+            {#key active.id}
+              <AiFeedbackPanel
+                pieceId={piece.id}
+                version={active}
+                {words}
+                hasImage={piece.image !== null}
+                beforeReview={saveBody}
+                onselectquote={selectQuote}
+                onapplytags={applyTags}
+              />
+            {/key}
+          </div>
+
+          <div role="tabpanel" id="side-panel-feedback" aria-labelledby="side-tab-feedback" hidden={tab !== 'feedback'}>
+            <p class="eyebrow tab-note">Pasted feedback on v{active.version_no}</p>
+            <label class="visually-hidden" for="feedback">Feedback on version {active.version_no}</label>
+            <textarea
+              id="feedback"
+              class="feedback"
+              bind:this={feedbackBox}
+              bind:value={feedback}
+              oninput={onBodyInput}
+              onblur={saveBody}
+              onselect={() => offerFromTextarea(feedbackBox, 'feedback')}
+              placeholder="Paste feedback from a teacher, an AI chat, or your own notes"
+            ></textarea>
+          </div>
+
+          <div role="tabpanel" id="side-panel-mistakes" aria-labelledby="side-tab-mistakes" hidden={tab !== 'mistakes'}>
+            <div class="row spread tab-note">
+              <p class="eyebrow">Mistakes in this piece</p>
+              <a class="small link" href="#/mistakes">Trend →</a>
+            </div>
+            <MistakeEditor bind:this={mistakeEditor} pieceId={piece.id} />
+          </div>
         </section>
       </aside>
     </div>
@@ -407,8 +560,22 @@
 
   .piece-head {
     display: grid;
-    gap: 10px;
+    gap: 16px;
     margin-bottom: 20px;
+    align-items: start;
+  }
+  .piece-head.with-chart {
+    grid-template-columns: minmax(0, 1fr) minmax(220px, 320px);
+  }
+  .head-text {
+    display: grid;
+    gap: 10px;
+    min-width: 0;
+  }
+  @media (max-width: 800px) {
+    .piece-head.with-chart {
+      grid-template-columns: minmax(0, 1fr);
+    }
   }
   .meta-row {
     display: flex;
@@ -559,17 +726,30 @@
     align-items: start;
   }
   .main-col {
-    grid-column: span 8;
+    grid-column: span 7;
     min-width: 0;
   }
+  /* Stays in view while the page scrolls through a long essay; scrolls on
+     its own if its content is taller than the window. */
   .rail {
-    grid-column: span 4;
+    grid-column: span 5;
     min-width: 0;
+    position: sticky;
+    top: 20px;
+    max-height: calc(100vh - 40px);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-width: thin;
   }
   @media (max-width: 1100px) {
     .main-col,
     .rail {
       grid-column: 1 / -1;
+    }
+    .rail {
+      position: static;
+      max-height: none;
+      overflow: visible;
     }
   }
   .essay-card {
@@ -578,20 +758,6 @@
     border-radius: var(--radius-lg);
     background: var(--surface);
     border: 1px solid var(--border);
-  }
-  .essay {
-    display: block;
-    min-height: 60vh;
-    padding: 0;
-    border: none;
-    background: transparent;
-    font-size: 18px;
-    line-height: 1.8;
-    color: #e4e1d9;
-    resize: vertical;
-  }
-  .essay:focus {
-    box-shadow: none;
   }
   .essay-foot {
     display: flex;
@@ -602,17 +768,51 @@
     padding-top: 12px;
     border-top: 1px solid var(--line);
   }
-  .main-col h2 {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-  }
-  .feedback-panel {
+  .side {
     display: grid;
-    gap: 0;
+    /* minmax(0, ...) lets wide content (a long model name in a select)
+       shrink to the panel instead of pushing past its edge. */
+    grid-template-columns: minmax(0, 1fr);
+    gap: 14px;
+    padding: 12px 22px 22px;
+  }
+  .side-tabs {
+    display: flex;
+    gap: 2px;
+    margin: 0 -10px;
+    border-bottom: 1px solid var(--line);
+  }
+  .side-tabs button {
+    min-height: 44px;
+    padding: 0 12px;
+    gap: 6px;
+    border: none;
+    border-bottom: 2px solid transparent;
+    border-radius: 0;
+    color: var(--muted);
+    font-size: 14px;
+  }
+  .side-tabs button:hover:not(:disabled) {
+    background: none;
+    color: var(--text);
+  }
+  .side-tabs button.active {
+    border-bottom-color: var(--accent);
+    color: var(--text);
+  }
+  .side-tabs .dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 3px;
+  }
+  .tab-note {
+    margin: 0 0 10px;
+  }
+  .tab-note p {
+    margin: 0;
   }
   .feedback {
-    min-height: 180px;
+    min-height: 240px;
     line-height: 1.6;
     font-size: 15px;
     field-sizing: content;

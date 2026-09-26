@@ -23,4 +23,11 @@ export const writingApi = {
   addVersion: (pieceId: number) => http.post<Version>(`/pieces/${pieceId}/versions`),
   updateVersion: (id: number, update: VersionUpdate) => http.put<Version>(`/versions/${id}`, update),
   removeVersion: (id: number) => http.del(`/versions/${id}`),
+
+  /** Attaches (or replaces) the chart image; returns the updated piece. */
+  putImage: (pieceId: number, image: Blob) => http.put<Piece>(`/pieces/${pieceId}/image`, image),
+  removeImage: (pieceId: number) => http.del(`/pieces/${pieceId}/image`),
+  /** `?v=` changes when the image is replaced, so the browser never shows an old one. */
+  imageUrl: (pieceId: number, uploadedAt: string) =>
+    `/api/pieces/${pieceId}/image?v=${encodeURIComponent(uploadedAt)}`,
 };

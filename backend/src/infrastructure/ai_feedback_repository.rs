@@ -5,7 +5,7 @@ use sqlx::{FromRow, SqlitePool};
 use super::database::timestamp;
 use crate::application::ports::AiFeedbackRepository;
 use crate::domain::error::{AppError, AppResult};
-use crate::domain::feedback::{AiFeedback, AiFeedbackRecord};
+use crate::domain::feedback::{AiCall, AiFeedback, AiFeedbackRecord};
 
 pub struct SqliteAiFeedbackRepository {
     pool: SqlitePool,
@@ -23,6 +23,7 @@ struct FeedbackRow {
     version_id: i64,
     model: String,
     result_json: String,
+    with_image: bool,
     input_tokens: i64,
     output_tokens: i64,
     created_at: DateTime<Utc>,
@@ -30,30 +31,25 @@ struct FeedbackRow {
 
 #[async_trait]
 impl AiFeedbackRepository for SqliteAiFeedbackRepository {
-    async fn save(
-        &self,
-        version_id: i64,
-        model: &str,
-        feedback: Option<&AiFeedback>,
-        input_tokens: i64,
-        output_tokens: i64,
-        now: DateTime<Utc>,
-    ) -> AppResult<i64> {
-        let json = feedback
+    async fn save(&self, call: AiCall<'_>) -> AppResult<i64> {
+        let json = call
+            .feedback
             .map(serde_json::to_string)
             .transpose()
             .map_err(|err| AppError::Internal(format!("feedback to json: {err}")))?;
         let id = sqlx::query(
             "INSERT INTO ai_feedback
-                (version_id, model, result_json, input_tokens, output_tokens, created_at)
-             VALUES (?, ?, ?, ?, ?, ?)",
+                (version_id, model, result_json, with_image,
+                 input_tokens, output_tokens, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?)",
         )
-        .bind(version_id)
-        .bind(model)
+        .bind(call.version_id)
+        .bind(call.model)
         .bind(json)
-        .bind(input_tokens)
-        .bind(output_tokens)
-        .bind(timestamp(now))
+        .bind(call.with_image)
+        .bind(call.input_tokens)
+        .bind(call.output_tokens)
+        .bind(timestamp(call.created_at))
         .execute(&self.pool)
         .await?
         .last_insert_rowid();
@@ -62,7 +58,7 @@ impl AiFeedbackRepository for SqliteAiFeedbackRepository {
 
     async fn for_piece(&self, piece_id: i64) -> AppResult<Vec<AiFeedbackRecord>> {
         let rows = sqlx::query_as::<_, FeedbackRow>(
-            "SELECT a.id, a.version_id, a.model, a.result_json,
+            "SELECT a.id, a.version_id, a.model, a.result_json, a.with_image,
                     a.input_tokens, a.output_tokens, a.created_at
                FROM ai_feedback a JOIN writing_versions v ON v.id = a.version_id
               WHERE v.piece_id = ? AND a.result_json IS NOT NULL
@@ -82,6 +78,7 @@ impl AiFeedbackRepository for SqliteAiFeedbackRepository {
                     version_id: row.version_id,
                     model: row.model,
                     feedback,
+                    with_image: row.with_image,
                     input_tokens: row.input_tokens,
                     output_tokens: row.output_tokens,
                     created_at: row.created_at,

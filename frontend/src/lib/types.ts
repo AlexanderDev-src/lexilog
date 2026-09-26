@@ -26,6 +26,12 @@ export interface CardInput {
   tags: string[];
 }
 
+/** Just a card's id and word, for finding deck words in writing. */
+export interface DeckWord {
+  id: number;
+  word: string;
+}
+
 export interface TagCount {
   name: string;
   card_count: number;
@@ -73,6 +79,16 @@ export interface Piece {
   created_at: string;
   updated_at: string;
   versions: Version[];
+  /** The attached chart (Task 1); its bytes are at /api/pieces/{id}/image. */
+  image: PieceImage | null;
+}
+
+export interface PieceImage {
+  mime: string;
+  width: number;
+  height: number;
+  bytes: number;
+  created_at: string;
 }
 
 export interface PieceSummary {
@@ -182,6 +198,8 @@ export interface AiFeedbackRecord {
   version_id: number;
   model: string;
   feedback: AiFeedback;
+  /** The model saw the chart image. */
+  with_image: boolean;
   input_tokens: number;
   output_tokens: number;
   created_at: string;
@@ -191,6 +209,8 @@ export interface ModelQuota {
   id: string;
   daily_limit: number;
   used_today: number;
+  /** Can read images (":vision" in AI_MODELS). */
+  vision: boolean;
 }
 
 export interface AiStatus {

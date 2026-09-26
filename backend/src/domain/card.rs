@@ -110,6 +110,14 @@ pub struct DueBreakdown {
     pub again: i64,
 }
 
+/// Just the word of every card, so the writing editor can underline the
+/// deck words used in an essay.
+#[derive(Debug, Clone, Serialize)]
+pub struct DeckWord {
+    pub id: i64,
+    pub word: String,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct TagCount {
     pub name: String,

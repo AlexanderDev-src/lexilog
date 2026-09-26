@@ -1,10 +1,11 @@
 # LexiLog
 
 A personal app for IELTS Academic practice: vocabulary cards scheduled with
-FSRS, writing with drafts and rewrites, a practice calendar, a mistake log and
-optional AI feedback. It runs on a home server and is accessed securely over
-Tailscale using automatic HTTPS. Docker binds only to `127.0.0.1:1111`,
-completely blocking unauthenticated access from the local Wi-Fi / LAN.
+FSRS, writing with drafts and rewrites (deck words underlined, Task 1 charts
+attached), a practice calendar, a mistake log and optional AI feedback. It
+runs on a home server and is accessed securely over Tailscale using automatic
+HTTPS. Docker binds only to `127.0.0.1:1111`, completely blocking
+unauthenticated access from the local Wi-Fi / LAN.
 
 > [!WARNING]
 > **Vibe-coded, for personal use only.** This project was built with an AI
@@ -32,6 +33,8 @@ Then open `https://<your-node>.<your-tailnet>.ts.net` (e.g. `https://alexander.t
 
 The database is `./data/ielts.db` on the host. Rebuilding or upgrading the
 image doesn't touch it. Migrations run automatically when the app starts.
+Task 1 chart images are stored inside the database too, so they are part of
+every backup.
 
 ## Backups
 
@@ -64,8 +67,31 @@ defaults point at the university gateway.
   the editor then offers another model with quota left.
 - One check costs roughly 2–3k tokens. Every call is stored in `ai_feedback`,
   failed ones too, so the usage count stays honest.
+- Task 1 charts: mark the models that can read images with `:vision`, e.g.
+  `claude-sonnet-5:200000:vision`. Only those are sent the chart (about
+  w × h / 750 tokens, ~850 for a 1024 px chart). With another model the
+  editor warns that the model gets the text only.
 - The key stays on the server: the browser never sees it. `.env` is in
   `.gitignore`.
+
+## Writing editor
+
+- **Side panel:** AI feedback, pasted feedback and the mistake log sit in tabs
+  beside the essay and stay in view while you scroll, so the text and the
+  feedback are on screen together. Clicking an AI issue shades its quote.
+- **Deck words:** words from your vocabulary deck get a dotted underline in
+  the essay, including regular forms (mitigate, mitigates, mitigated,
+  mitigating) and common irregular ones (rise, rose, risen). A misspelt form
+  such as "rised" is never counted.
+- **Add to deck:** select a word or phrase (up to 6 words) in the essay, the
+  pasted feedback or the AI feedback. The side panel offers it as a new card
+  with the surrounding sentence as the example.
+- **Task 1 chart:** paste an image (Ctrl+V), drop it on the chart box or pick
+  a file. The browser crops plain margins, shrinks it to 1024 px on the long
+  side (1280 px with "High detail"; small images are never enlarged),
+  sharpens it lightly and saves it as PNG (WebP if the PNG is over 1 MB). You
+  see the result and its token cost before it is uploaded. The server accepts
+  PNG or WebP only, up to 3 MB and 2048 px.
 
 ## Development
 
@@ -92,7 +118,7 @@ Checks: `cargo test`, `cargo clippy`, `npm run check`.
 | `DESIRED_RETENTION` | `0.9`             | FSRS target recall (0.70 – 0.99)         |
 | `AI_BASE_URL`       | university gateway| OpenAI-compatible API base URL           |
 | `AI_API_KEY`        | (none)            | Gateway key; unset = AI feedback off     |
-| `AI_MODELS`         | `claude-sonnet-5:200000` | `model:daily_tokens`, comma separated |
+| `AI_MODELS`         | `claude-sonnet-5:200000` | `model:daily_tokens[:vision]`, comma separated |
 | `AI_DEFAULT_MODEL`  | first in the list | Model used unless another is picked      |
 
 ## Code layout
@@ -102,7 +128,8 @@ The backend follows clean architecture. Inner layers never import outer ones.
 ```
 backend/src/
   domain/          data types and pure rules (word count, rating, calendar days,
-                   heatmap levels, mistake trends, checking AI replies)
+                   heatmap levels, mistake trends, checking AI replies,
+                   checking uploaded images)
   application/     use cases (services) + ports = traits for storage, scheduling and AI
   infrastructure/  SQLite repositories (sqlx), the FSRS scheduler (fsrs crate),
                    the AI reviewer (reqwest, chat/completions)
@@ -115,8 +142,11 @@ frontend/src/
   App.svelte       sidebar layout (top bar on phones), routes; Review runs full screen
   pages/           one component per screen
   lib/api/         typed calls to the backend
+  lib/deckWords.ts finds deck words (and their forms) in a text
+  lib/chartImage.ts crops, shrinks and sharpens a chart before upload
   lib/components/  Icon, CardForm, TagInput, Timer, VersionDiff, Heatmap,
-                   PracticeForm, MistakeEditor, AiFeedbackPanel
+                   PracticeForm, MistakeEditor, AiFeedbackPanel,
+                   HighlightTextarea, DeckWordsPanel, ChartImage
 ```
 
 ## Scheduling rules

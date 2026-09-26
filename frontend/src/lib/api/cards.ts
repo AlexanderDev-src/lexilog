@@ -1,4 +1,4 @@
-import type { Card, CardInput, DueQueue, Rating, TagCount } from '../types';
+import type { Card, CardInput, DeckWord, DueQueue, Rating, TagCount } from '../types';
 import { http, query } from './client';
 
 export interface CardSearch {
@@ -15,6 +15,8 @@ export const cardsApi = {
   update: (id: number, input: CardInput) => http.put<Card>(`/cards/${id}`, input),
   remove: (id: number) => http.del(`/cards/${id}`),
   tags: () => http.get<TagCount[]>('/tags'),
+  /** Every card's id and word, for underlining deck words in writing. */
+  words: () => http.get<DeckWord[]>('/cards/words'),
 
   due: (limit = 200) => http.get<DueQueue>(`/review/due${query({ limit })}`),
   review: (id: number, rating: Rating, durationMs?: number) =>

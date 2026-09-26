@@ -5,7 +5,19 @@ FSRS, writing with drafts and rewrites, a practice calendar, a mistake log and
 optional AI feedback. It runs on a home server and is used over the LAN on
 port **1111**.
 
-> No login. Keep it on the home network and never port-forward 1111.
+> [!WARNING]
+> **Vibe-coded, for personal use only.** This project was built with an AI
+> coding assistant for one person's own IELTS study. It has not been security
+> reviewed or tested for production, and there is **no guarantee of security**.
+>
+> - There is no login, no user accounts and no rate limiting. Anyone who can
+>   reach port 1111 can read and change everything.
+> - Keep it on a trusted home network. Never port-forward it or expose it to
+>   the internet.
+> - Do not use it as a product or run it for other people. If you want to,
+>   treat this code as a starting point and do your own security review first.
+>
+> It is provided as is, without warranty (see [LICENSE](LICENSE)).
 
 ## Run with Docker (home server)
 

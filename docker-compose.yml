@@ -1,0 +1,21 @@
+services:
+  app:
+    build: .
+    image: ielts-practice
+    container_name: ielts-practice
+    restart: unless-stopped
+    ports:
+      - "1111:1111"
+    # AI feedback settings and the API key (see .env.example). Optional:
+    # without the file the app runs with AI feedback switched off.
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      APP_TZ: Asia/Bangkok
+      DESIRED_RETENTION: "0.9"
+    volumes:
+      # The database lives on the host, so rebuilding the image never loses it.
+      - ./data:/data
+      # Written by scripts/backup.sh.
+      - ./backups:/backups

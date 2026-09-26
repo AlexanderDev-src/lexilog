@@ -1,0 +1,20 @@
+[package]
+name = "ielts"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+async-trait = "0.1.92"
+chrono = { version = "0.4.45", features = ["serde"] }
+chrono-tz = "0.10.4"
+dotenvy = "0.15"
+env_logger = "0.11.11"
+fsrs = "6.6"
+log = "0.4.34"
+ntex = { version = "3.12", features = ["tokio"] }
+ntex-files = "3"
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "sqlite", "chrono", "migrate", "macros"] }
+thiserror = "2.0.21"

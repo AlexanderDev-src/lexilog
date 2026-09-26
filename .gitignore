@@ -1,0 +1,15 @@
+# Build output and dependencies
+backend/target/
+frontend/node_modules/
+frontend/dist/
+
+# Local data: never commit the database or backups
+data/
+backups/
+backend/data/
+*.db
+*.db-wal
+*.db-shm
+
+# Secrets: the AI API key lives here
+.env

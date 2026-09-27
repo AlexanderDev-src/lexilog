@@ -24,6 +24,7 @@ impl SqliteCardRepository {
 struct CardRow {
     id: i64,
     word: String,
+    part_of_speech: String,
     meaning: String,
     example: String,
     source: String,
@@ -46,6 +47,7 @@ impl CardRow {
         Ok(Card {
             id: self.id,
             word: self.word,
+            part_of_speech: self.part_of_speech,
             meaning: self.meaning,
             example: self.example,
             source: self.source,
@@ -70,7 +72,7 @@ impl CardRow {
 /// user input being pasted into SQL. Ours only joins constant text; every
 /// user value goes through `.bind()`.
 const SELECT_CARD: &str = "
-    SELECT c.id, c.word, c.meaning, c.example, c.source,
+    SELECT c.id, c.word, c.part_of_speech, c.meaning, c.example, c.source,
            (SELECT json_group_array(t.name ORDER BY t.name)
               FROM card_tags ct JOIN tags t ON t.id = ct.tag_id
              WHERE ct.card_id = c.id) AS tags,
@@ -177,10 +179,11 @@ impl CardRepository for SqliteCardRepository {
 
         // `&mut *tx` borrows the connection inside the transaction.
         let id = sqlx::query(
-            "INSERT INTO cards (word, meaning, example, source, due, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO cards (word, part_of_speech, meaning, example, source, due, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&input.word)
+        .bind(&input.part_of_speech)
         .bind(&input.meaning)
         .bind(&input.example)
         .bind(&input.source)
@@ -202,10 +205,12 @@ impl CardRepository for SqliteCardRepository {
     async fn update(&self, id: i64, input: &CardInput, now: DateTime<Utc>) -> AppResult<bool> {
         let mut tx = self.pool.begin().await?;
         let result = sqlx::query(
-            "UPDATE cards SET word = ?, meaning = ?, example = ?, source = ?, updated_at = ?
+            "UPDATE cards SET word = ?, part_of_speech = ?, meaning = ?, example = ?, source = ?,
+                             updated_at = ?
              WHERE id = ?",
         )
         .bind(&input.word)
+        .bind(&input.part_of_speech)
         .bind(&input.meaning)
         .bind(&input.example)
         .bind(&input.source)

@@ -1,9 +1,13 @@
 // Shapes of the JSON the backend sends and accepts.
 // Timestamps are UTC strings like "2026-09-26T03:15:00Z"; dates are "YYYY-MM-DD".
 
+/** Codes the backend accepts for a card's part of speech. */
+export type PartOfSpeech = 'n' | 'v' | 'adj' | 'adv' | 'prep' | 'conj' | 'phrv' | 'phrase' | 'idiom';
+
 export interface Card {
   id: number;
   word: string;
+  part_of_speech: PartOfSpeech | ''; // '' = not set
   meaning: string;
   example: string;
   source: string;
@@ -20,6 +24,7 @@ export interface Card {
 
 export interface CardInput {
   word: string;
+  part_of_speech: PartOfSpeech | '';
   meaning: string;
   example: string;
   source: string;

@@ -3,7 +3,7 @@
   import { cardsApi } from '../lib/api/cards';
   import CardForm from '../lib/components/CardForm.svelte';
   import Icon from '../lib/components/Icon.svelte';
-  import { formatDue } from '../lib/format';
+  import { formatDue, posLabel } from '../lib/format';
   import { navigate } from '../lib/router.svelte';
   import type { Card, CardInput } from '../lib/types';
 
@@ -48,7 +48,7 @@
 {#if error}<p class="error">{error}</p>{/if}
 
 {#if card}
-  <h1>{card.word}</h1>
+  <h1>{card.word}{#if card.part_of_speech}<span class="pos">{posLabel(card.part_of_speech)}</span>{/if}</h1>
 
   <div class="layout">
     <section class="panel form">
@@ -94,6 +94,15 @@
     font-weight: 600;
     font-size: 14px;
     text-decoration: none;
+  }
+  .pos {
+    margin-left: 12px;
+    font-family: var(--sans);
+    font-weight: 500;
+    font-size: 0.5em;
+    font-style: italic;
+    letter-spacing: 0;
+    color: var(--muted);
   }
   .layout {
     display: grid;

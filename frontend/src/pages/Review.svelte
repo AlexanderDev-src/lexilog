@@ -2,7 +2,7 @@
   import { onMount } from 'svelte';
   import { cardsApi } from '../lib/api/cards';
   import Icon from '../lib/components/Icon.svelte';
-  import { formatInterval, formatTime } from '../lib/format';
+  import { formatInterval, formatTime, posName } from '../lib/format';
   import type { DueCard, Rating } from '../lib/types';
 
   const BUTTONS: { rating: Rating; label: string; key: keyof DueCard['preview'] }[] = [
@@ -159,6 +159,7 @@
           </div>
         {/if}
         <h1 class="word">{current.word}</h1>
+        {#if current.part_of_speech}<span class="pos">{posName(current.part_of_speech)}</span>{/if}
         {#if revealed}
           <div class="answer">
             {#if current.meaning}<p class="meaning">{current.meaning}</p>{/if}
@@ -330,6 +331,12 @@
     font-size: clamp(3rem, 9vw, 6rem);
     letter-spacing: -0.045em;
     overflow-wrap: anywhere;
+  }
+  .pos {
+    margin-top: -10px;
+    font-size: 18px;
+    font-style: italic;
+    color: var(--muted);
   }
   .answer {
     width: 100%;

@@ -9,6 +9,8 @@ use super::review::MemoryState;
 pub struct Card {
     pub id: i64,
     pub word: String,
+    /// One of [`PARTS_OF_SPEECH`], or "" when not set.
+    pub part_of_speech: String,
     pub meaning: String,
     pub example: String,
     pub source: String,
@@ -37,11 +39,19 @@ impl Card {
     }
 }
 
+/// The part-of-speech codes a card may have: noun, verb, adjective, adverb,
+/// preposition, conjunction, phrasal verb, phrase, idiom.
+pub const PARTS_OF_SPEECH: [&str; 9] = [
+    "n", "v", "adj", "adv", "prep", "conj", "phrv", "phrase", "idiom",
+];
+
 /// Body of "create card" and "edit card". Only `word` is required;
 /// `#[serde(default)]` fills missing fields with "" or an empty list.
 #[derive(Debug, Clone, Deserialize)]
 pub struct CardInput {
     pub word: String,
+    #[serde(default)]
+    pub part_of_speech: String,
     #[serde(default)]
     pub meaning: String,
     #[serde(default)]
@@ -54,11 +64,18 @@ pub struct CardInput {
 
 impl CardInput {
     /// Trims every field, lowercases and de-duplicates tags,
-    /// and rejects an empty word.
+    /// and rejects an empty word or an unknown part of speech.
     pub fn validate(self) -> AppResult<Self> {
         let word = self.word.trim().to_string();
         if word.is_empty() {
             return Err(AppError::Validation("word is required".into()));
+        }
+
+        let part_of_speech = self.part_of_speech.trim().to_string();
+        if !part_of_speech.is_empty() && !PARTS_OF_SPEECH.contains(&part_of_speech.as_str()) {
+            return Err(AppError::Validation(format!(
+                "unknown part of speech: {part_of_speech}"
+            )));
         }
 
         let mut tags: Vec<String> = Vec::new();
@@ -71,6 +88,7 @@ impl CardInput {
 
         Ok(Self {
             word,
+            part_of_speech,
             meaning: self.meaning.trim().to_string(),
             example: self.example.trim().to_string(),
             source: self.source.trim().to_string(),
@@ -131,6 +149,7 @@ mod tests {
     fn input(word: &str, tags: &[&str]) -> CardInput {
         CardInput {
             word: word.into(),
+            part_of_speech: String::new(),
             meaning: " to reduce ".into(),
             example: String::new(),
             source: String::new(),
@@ -151,5 +170,15 @@ mod tests {
         assert_eq!(card.word, "mitigate");
         assert_eq!(card.meaning, "to reduce");
         assert_eq!(card.tags, vec!["environment", "policy"]);
+    }
+
+    #[test]
+    fn part_of_speech_must_be_known() {
+        let mut card = input("mitigate", &[]);
+        card.part_of_speech = " v ".into();
+        assert_eq!(card.clone().validate().unwrap().part_of_speech, "v");
+
+        card.part_of_speech = "verb".into();
+        assert!(card.validate().is_err());
     }
 }

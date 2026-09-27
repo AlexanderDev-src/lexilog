@@ -5,7 +5,7 @@
   import Heatmap from '../lib/components/Heatmap.svelte';
   import Icon from '../lib/components/Icon.svelte';
   import PracticeForm from '../lib/components/PracticeForm.svelte';
-  import { formatDate, PRESETS } from '../lib/format';
+  import { formatDate, posLabel, PRESETS } from '../lib/format';
   import type { Card, Dashboard } from '../lib/types';
 
   let dashboard = $state<Dashboard | null>(null);
@@ -142,7 +142,9 @@
           {#each recent as card (card.id)}
             <li>
               <a href="#/words/{card.id}">
-                <span class="word">{card.word}</span>
+                <span class="word"
+                  >{card.word}{#if card.part_of_speech}<span class="pos">{posLabel(card.part_of_speech)}</span>{/if}</span
+                >
                 <span class="meaning">{card.meaning}</span>
               </a>
             </li>
@@ -414,6 +416,14 @@
     font-family: var(--display);
     font-weight: 700;
     font-size: 17px;
+  }
+  .pos {
+    margin-left: 6px;
+    font-family: var(--sans);
+    font-weight: 500;
+    font-size: 13px;
+    font-style: italic;
+    color: var(--muted);
   }
   .meaning {
     font-size: 13px;

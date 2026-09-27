@@ -60,7 +60,7 @@
     saving = true;
     error = '';
     try {
-      const card = await cardsApi.create({ word, meaning, example, source, tags: [] });
+      const card = await cardsApi.create({ word, part_of_speech: '', meaning, example, source, tags: [] });
       added = { id: card.id, word: card.word };
       onadded(added);
     } catch (err) {

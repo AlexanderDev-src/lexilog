@@ -1,4 +1,4 @@
-import type { Skill, WritingKind } from './types';
+import type { PartOfSpeech, Skill, WritingKind } from './types';
 
 /** Same rule as the backend: anything between whitespace is one word. */
 export function countWords(text: string): number {
@@ -57,6 +57,29 @@ export const PRESETS: Record<WritingKind, WritingPreset> = {
   task2: { label: 'Task 2', minutes: 40, minWords: 250 },
   paragraph: { label: 'Paragraph', minutes: null, minWords: null },
 };
+
+/** Short label shown after a word ("n."), and the full name for the picker. */
+export const PARTS_OF_SPEECH: { value: PartOfSpeech; short: string; name: string }[] = [
+  { value: 'n', short: 'n.', name: 'noun' },
+  { value: 'v', short: 'v.', name: 'verb' },
+  { value: 'adj', short: 'adj.', name: 'adjective' },
+  { value: 'adv', short: 'adv.', name: 'adverb' },
+  { value: 'prep', short: 'prep.', name: 'preposition' },
+  { value: 'conj', short: 'conj.', name: 'conjunction' },
+  { value: 'phrv', short: 'phr. v.', name: 'phrasal verb' },
+  { value: 'phrase', short: 'phrase', name: 'phrase' },
+  { value: 'idiom', short: 'idiom', name: 'idiom' },
+];
+
+/** 'adj' -> "adj.", '' -> "" */
+export function posLabel(pos: PartOfSpeech | ''): string {
+  return PARTS_OF_SPEECH.find((p) => p.value === pos)?.short ?? '';
+}
+
+/** 'adj' -> "adjective", '' -> "" */
+export function posName(pos: PartOfSpeech | ''): string {
+  return PARTS_OF_SPEECH.find((p) => p.value === pos)?.name ?? '';
+}
 
 export const SKILLS: { value: Skill; label: string }[] = [
   { value: 'listening', label: 'Listening' },

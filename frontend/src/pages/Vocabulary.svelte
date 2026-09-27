@@ -3,7 +3,7 @@
   import { cardsApi } from '../lib/api/cards';
   import CardForm from '../lib/components/CardForm.svelte';
   import Icon from '../lib/components/Icon.svelte';
-  import { formatInterval } from '../lib/format';
+  import { formatInterval, posLabel } from '../lib/format';
   import type { Card, CardInput, TagCount } from '../lib/types';
 
   const PAGE_SIZE = 50;
@@ -149,7 +149,9 @@
         <li>
           <a href="#/words/{card.id}">
             <div class="top">
-              <span class="word">{card.word}</span>
+              <span class="word"
+                >{card.word}{#if card.part_of_speech}<span class="pos">{posLabel(card.part_of_speech)}</span>{/if}</span
+              >
               {#each card.tags as t (t)}<span class="chip small">{t}</span>{/each}
               <span class="right">
                 <span class="meter" title="Memory strength {level} of 5">
@@ -287,6 +289,15 @@
     font-weight: 700;
     font-size: 22px;
     letter-spacing: -0.015em;
+  }
+  .pos {
+    margin-left: 8px;
+    font-family: var(--sans);
+    font-weight: 500;
+    font-size: 15px;
+    font-style: italic;
+    letter-spacing: 0;
+    color: var(--muted);
   }
   .right {
     margin-left: auto;

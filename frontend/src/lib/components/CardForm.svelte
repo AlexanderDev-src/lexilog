@@ -1,6 +1,7 @@
 <script lang="ts">
   import { untrack } from 'svelte';
-  import type { CardInput } from '../types';
+  import { PARTS_OF_SPEECH } from '../format';
+  import type { CardInput, PartOfSpeech } from '../types';
   import TagInput from './TagInput.svelte';
 
   interface Props {
@@ -8,8 +9,8 @@
     submitLabel?: string;
     tagSuggestions?: string[];
     /**
-     * Add mode: after saving, clear word/meaning/example but keep source and
-     * tags, since the next word often comes from the same article.
+     * Add mode: after saving, clear word/part of speech/meaning/example but
+     * keep source and tags, since the next word often comes from the same article.
      */
     keepContext?: boolean;
     autofocus?: boolean;
@@ -27,8 +28,17 @@
 
   // Copy the starting values once; the form edits its own state after that.
   // `untrack` says "read this now, don't follow later changes".
-  const start = untrack(() => ({ word: '', meaning: '', example: '', source: '', tags: [], ...initial }));
+  const start = untrack(() => ({
+    word: '',
+    part_of_speech: '' as PartOfSpeech | '',
+    meaning: '',
+    example: '',
+    source: '',
+    tags: [],
+    ...initial,
+  }));
   let word = $state(start.word);
+  let partOfSpeech = $state(start.part_of_speech);
   let meaning = $state(start.meaning);
   let example = $state(start.example);
   let source = $state(start.source);
@@ -52,9 +62,9 @@
     saving = true;
     error = '';
     try {
-      await onsave({ word, meaning, example, source, tags });
+      await onsave({ word, part_of_speech: partOfSpeech, meaning, example, source, tags });
       if (keepContext) {
-        word = meaning = example = '';
+        word = meaning = example = partOfSpeech = '';
         wordInput?.focus();
       }
     } catch (err) {
@@ -74,17 +84,28 @@
 </script>
 
 <form class="card-form" onsubmit={submit}>
-  <label>
-    Word
-    <input
-      class="word"
-      bind:this={wordInput}
-      bind:value={word}
-      autocomplete="off"
-      spellcheck="false"
-      placeholder="e.g. alleviate"
-    />
-  </label>
+  <div class="word-row">
+    <label>
+      Word
+      <input
+        class="word"
+        bind:this={wordInput}
+        bind:value={word}
+        autocomplete="off"
+        spellcheck="false"
+        placeholder="e.g. alleviate"
+      />
+    </label>
+    <label>
+      Part of speech
+      <select class="pos" bind:value={partOfSpeech}>
+        <option value="">—</option>
+        {#each PARTS_OF_SPEECH as p (p.value)}
+          <option value={p.value} title={p.name}>{p.short}</option>
+        {/each}
+      </select>
+    </label>
+  </div>
   <label>
     Meaning
     <textarea bind:value={meaning} rows="2" onkeydown={saveShortcut}></textarea>
@@ -120,6 +141,11 @@
     display: grid;
     gap: 16px;
   }
+  .word-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 12px;
+  }
   .word {
     height: 64px;
     padding: 0 18px;
@@ -128,6 +154,12 @@
     font-weight: 700;
     font-size: 28px;
     letter-spacing: -0.02em;
+  }
+  .pos {
+    height: 64px;
+    padding: 0 14px;
+    border-radius: 14px;
+    font-weight: 600;
   }
   textarea {
     line-height: 1.5;

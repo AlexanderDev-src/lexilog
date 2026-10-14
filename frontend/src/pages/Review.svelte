@@ -116,6 +116,44 @@
       .map((text, i) => ({ text, hit: i % 2 === 1 }));
   }
 
+  /**
+   * The card grows with a long word (see .deck). When the card cannot grow
+   * any more, this shrinks the word until it fits. Phrases wrap at spaces.
+   */
+  function fitWord(node: HTMLElement) {
+    const card = node.parentElement as HTMLElement;
+    const fit = () => {
+      node.style.removeProperty('--fit');
+      node.style.overflowWrap = '';
+      const style = getComputedStyle(card);
+      const room = card.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
+      // clientWidth is rounded, so less than a pixel over is noise.
+      const over = () => node.getBoundingClientRect().width - room >= 1;
+      // A scale, not a pixel size: text-only zoom would enlarge pixels again.
+      // Letter widths are rounded too, so one step can land a little off.
+      let scale = 1;
+      for (let step = 0; step < 3 && over(); step++) {
+        scale *= room / node.getBoundingClientRect().width;
+        node.style.setProperty('--fit', String(scale));
+      }
+      // Still too wide at the smallest size: let it break.
+      if (over()) node.style.overflowWrap = 'anywhere';
+    };
+    fit();
+    // Window size, the web font arriving and text zoom all change the fit.
+    let frame = 0;
+    const observer = new ResizeObserver(() => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(fit);
+    });
+    observer.observe(card);
+    observer.observe(node);
+    return () => {
+      observer.disconnect();
+      cancelAnimationFrame(frame);
+    };
+  }
+
   onMount(() => {
     load();
     return () => clearTimeout(wakeTimer);
@@ -152,47 +190,51 @@
     {#if loading && !current}
       <p class="muted">Loading…</p>
     {:else if current}
-      <section class="card">
-        {#if current.tags.length}
-          <div class="tags">
-            {#each current.tags as t (t)}<span class="tag">{t}</span>{/each}
-          </div>
-        {/if}
-        <h1 class="word">{current.word}</h1>
-        {#if current.part_of_speech}<span class="pos">{posName(current.part_of_speech)}</span>{/if}
+      <div class="deck">
+        <section class="card">
+          {#if current.tags.length}
+            <div class="tags">
+              {#each current.tags as t (t)}<span class="tag">{t}</span>{/each}
+            </div>
+          {/if}
+          {#key current.id}
+            <h1 class="word" {@attach fitWord}>{current.word}</h1>
+          {/key}
+          {#if current.part_of_speech}<span class="pos">{posName(current.part_of_speech)}</span>{/if}
+          {#if revealed}
+            <div class="answer">
+              {#if current.meaning}<p class="meaning">{current.meaning}</p>{/if}
+              {#if current.example}
+                <p class="example">
+                  {#each highlight(current.example, current.word) as part, i (i)}
+                    {#if part.hit}<mark>{part.text}</mark>{:else}{part.text}{/if}
+                  {/each}
+                </p>
+              {/if}
+              {#if current.source}<span class="source">{current.source}</span>{/if}
+              {#if !current.meaning && !current.example}
+                <p class="muted">No meaning saved yet. <a href="#/words/{current.id}">Add one</a></p>
+              {/if}
+            </div>
+          {:else}
+            <p class="muted">Say the meaning out loud, then check.</p>
+          {/if}
+        </section>
+
         {#if revealed}
-          <div class="answer">
-            {#if current.meaning}<p class="meaning">{current.meaning}</p>{/if}
-            {#if current.example}
-              <p class="example">
-                {#each highlight(current.example, current.word) as part, i (i)}
-                  {#if part.hit}<mark>{part.text}</mark>{:else}{part.text}{/if}
-                {/each}
-              </p>
-            {/if}
-            {#if current.source}<span class="source">{current.source}</span>{/if}
-            {#if !current.meaning && !current.example}
-              <p class="muted">No meaning saved yet. <a href="#/words/{current.id}">Add one</a></p>
-            {/if}
+          <div class="ratings">
+            {#each BUTTONS as b (b.rating)}
+              <button type="button" class="rate {b.key}" disabled={busy} onclick={() => rate(b.rating)}>
+                <span class="interval">{formatInterval(current.preview[b.key])}</span>
+                <span class="label">{b.label}</span>
+                <kbd>{b.rating}</kbd>
+              </button>
+            {/each}
           </div>
         {:else}
-          <p class="muted">Say the meaning out loud, then check.</p>
+          <button type="button" class="reveal light" onclick={reveal}>Show answer <kbd>Space</kbd></button>
         {/if}
-      </section>
-
-      {#if revealed}
-        <div class="ratings">
-          {#each BUTTONS as b (b.rating)}
-            <button type="button" class="rate {b.key}" disabled={busy} onclick={() => rate(b.rating)}>
-              <span class="interval">{formatInterval(current.preview[b.key])}</span>
-              <span class="label">{b.label}</span>
-              <kbd>{b.rating}</kbd>
-            </button>
-          {/each}
-        </div>
-      {:else}
-        <button type="button" class="reveal light" onclick={reveal}>Show answer <kbd>Space</kbd></button>
-      {/if}
+      </div>
     {:else if waiting.length && nextWaitingAt !== null}
       <section class="card">
         <h1 class="done-title">Back soon</h1>
@@ -292,11 +334,27 @@
     justify-content: center;
     gap: 24px;
     padding: 32px 16px 40px;
+    /* In rem, so the card keeps its shape when only the text is zoomed. */
+    --card-width: 51.25rem;
+    --card-max: 73.75rem;
+    --card-pad: 3.5rem;
+  }
+  /* The card and its buttons share one width, and it follows a long word. */
+  .deck {
+    width: fit-content;
+    min-width: min(var(--card-width), 100%);
+    max-width: min(var(--card-max), 100%);
+    display: flex;
+    flex-direction: column;
+    gap: 24px;
+  }
+  .deck .card {
+    width: auto;
   }
   .card {
-    width: min(820px, 100%);
+    width: min(var(--card-width), 100%);
     min-height: 440px;
-    padding: 40px 56px;
+    padding: 40px var(--card-pad);
     border-radius: 28px;
     background: var(--surface);
     border: 1px solid var(--border);
@@ -326,11 +384,20 @@
     display: inline-flex;
     align-items: center;
   }
+  /* Only the word may widen the card. */
+  .tags,
+  .answer {
+    width: 100%;
+    contain: inline-size;
+  }
   .word {
+    /* A phrase wraps at the usual card width; one long word widens the card. */
+    max-width: calc(var(--card-width) - 2 * var(--card-pad));
+    min-width: min-content;
     margin: 0;
-    font-size: clamp(3rem, 9vw, 6rem);
+    /* fitWord sets --fit when the card cannot grow any more. */
+    font-size: max(1.75rem, calc(clamp(3rem, 9vw, 6rem) * var(--fit, 1)));
     letter-spacing: -0.045em;
-    overflow-wrap: anywhere;
   }
   .pos {
     margin-top: -10px;
@@ -339,7 +406,6 @@
     color: var(--muted);
   }
   .answer {
-    width: 100%;
     padding-top: 22px;
     border-top: 1px solid var(--border);
     display: flex;
@@ -377,7 +443,6 @@
   }
 
   .reveal {
-    width: min(820px, 100%);
     min-height: 72px;
     border-radius: 20px;
     font-size: 18px;
@@ -392,7 +457,6 @@
     font-size: 12px;
   }
   .ratings {
-    width: min(820px, 100%);
     display: grid;
     grid-template-columns: repeat(4, minmax(0, 1fr));
     gap: 12px;
@@ -491,14 +555,18 @@
       font-size: 0;
       gap: 0;
     }
+    .deck,
+    .card {
+      flex: 1;
+    }
     .card {
       min-height: 0;
-      flex: 1;
-      padding: 28px 22px;
+      padding: 28px var(--card-pad);
     }
     .stage {
       justify-content: flex-start;
       padding: 16px 16px 28px;
+      --card-pad: 1.375rem;
     }
     .ratings {
       grid-template-columns: repeat(2, minmax(0, 1fr));

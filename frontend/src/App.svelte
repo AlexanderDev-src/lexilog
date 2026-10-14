@@ -9,12 +9,15 @@
   import Practice from './pages/Practice.svelte';
   import Review from './pages/Review.svelte';
   import Vocabulary from './pages/Vocabulary.svelte';
+  import VocabularyAdd from './pages/VocabularyAdd.svelte';
   import WritingEditor from './pages/WritingEditor.svelte';
   import WritingList from './pages/WritingList.svelte';
 
   const routes: { pattern: string; page: Component<any> }[] = [
     { pattern: '/', page: Home },
     { pattern: '/words', page: Vocabulary },
+    // Before "/words/:id", so "new" isn't read as an id.
+    { pattern: '/words/new', page: VocabularyAdd },
     { pattern: '/words/:id', page: CardEdit },
     { pattern: '/review', page: Review },
     { pattern: '/writing', page: WritingList },
@@ -84,7 +87,7 @@
         {/each}
       </nav>
       <div class="sidebar-foot">
-        <a class="add-word" href="#/words"><Icon name="plus" size={18} stroke={2} /> Add a word</a>
+        <a class="add-word" href="#/words/new"><Icon name="plus" size={18} stroke={2} /> Add a word</a>
         <span class="host">home server · :1111</span>
       </div>
     </aside>

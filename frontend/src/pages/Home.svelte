@@ -40,7 +40,7 @@
     <h1>Today</h1>
   </div>
   <div class="row">
-    <a class="button" href="#/words"><Icon name="plus" size={18} stroke={2} /> Add word</a>
+    <a class="button" href="#/words/new"><Icon name="plus" size={18} stroke={2} /> Add word</a>
     <a class="button" href="#/writing"><Icon name="writing" size={18} /> New essay</a>
   </div>
 </header>
@@ -67,7 +67,7 @@
           <a class="button primary go" href="#/review">Start review <Icon name="arrow-right" stroke={2.2} /></a>
         {:else}
           <p class="muted small">All caught up. New words are due as soon as you add them.</p>
-          <a class="button" href="#/words">Add words</a>
+          <a class="button" href="#/words/new">Add words</a>
         {/if}
       </div>
       {#if next}
@@ -151,7 +151,7 @@
           {/each}
         </ul>
       {:else}
-        <p class="muted">No words yet. <a href="#/words">Add your first one.</a></p>
+        <p class="muted">No words yet. <a href="#/words/new">Add your first one.</a></p>
       {/if}
     </section>
   </div>

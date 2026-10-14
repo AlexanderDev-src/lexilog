@@ -4,7 +4,9 @@ use sqlx::{AssertSqlSafe, FromRow, SqliteConnection, SqlitePool};
 
 use super::database::timestamp;
 use crate::application::ports::CardRepository;
-use crate::domain::card::{Card, CardFilter, CardInput, DeckWord, DueBreakdown, TagCount};
+use crate::domain::card::{
+    Card, CardFilter, CardInput, CardSort, DeckWord, DueBreakdown, TagCount,
+};
 use crate::domain::error::{AppError, AppResult};
 use crate::domain::review::NewReviewLog;
 
@@ -125,33 +127,56 @@ fn like_pattern(term: &str) -> String {
     format!("%{escaped}%")
 }
 
+/// The search part of the card list, shared by `list` and `count`.
+/// `?1 IS NULL OR ...` makes each filter optional: binding NULL turns it off.
+const FILTER_WHERE: &str = "
+     WHERE (?1 IS NULL OR c.word LIKE ?1 ESCAPE '\\'
+                      OR c.meaning LIKE ?1 ESCAPE '\\'
+                      OR c.example LIKE ?1 ESCAPE '\\')
+       AND (?2 IS NULL OR EXISTS (
+               SELECT 1 FROM card_tags ct JOIN tags t ON t.id = ct.tag_id
+                WHERE ct.card_id = c.id AND t.name = ?2))";
+
+/// The values bound to `?1` (search pattern) and `?2` (tag) in [`FILTER_WHERE`].
+fn filter_terms(filter: &CardFilter) -> (Option<String>, Option<String>) {
+    let q = filter
+        .q
+        .as_deref()
+        .map(str::trim)
+        .filter(|q| !q.is_empty())
+        .map(like_pattern);
+    let tag = filter
+        .tag
+        .as_deref()
+        .map(|t| t.trim().to_lowercase())
+        .filter(|t| !t.is_empty());
+    (q, tag)
+}
+
+/// Constant SQL for each sort, so nothing from the request reaches the query text.
+fn order_by(sort: CardSort) -> &'static str {
+    match sort {
+        CardSort::Newest => "c.created_at DESC, c.id DESC",
+        CardSort::Az => "c.word COLLATE NOCASE ASC, c.id",
+        CardSort::Za => "c.word COLLATE NOCASE DESC, c.id",
+        CardSort::Pos => {
+            "CASE c.part_of_speech
+                 WHEN 'n' THEN 0 WHEN 'v' THEN 1 WHEN 'adj' THEN 2 WHEN 'adv' THEN 3
+                 WHEN 'prep' THEN 4 WHEN 'conj' THEN 5 WHEN 'phrv' THEN 6
+                 WHEN 'phrase' THEN 7 WHEN 'idiom' THEN 8 ELSE 9 END,
+             c.word COLLATE NOCASE ASC, c.id"
+        }
+    }
+}
+
 #[async_trait]
 impl CardRepository for SqliteCardRepository {
     async fn list(&self, filter: &CardFilter) -> AppResult<Vec<Card>> {
-        // `?1 IS NULL OR ...` makes each filter optional: binding NULL turns it off.
         let sql = format!(
-            "{SELECT_CARD}
-             WHERE (?1 IS NULL OR c.word LIKE ?1 ESCAPE '\\'
-                              OR c.meaning LIKE ?1 ESCAPE '\\'
-                              OR c.example LIKE ?1 ESCAPE '\\')
-               AND (?2 IS NULL OR EXISTS (
-                       SELECT 1 FROM card_tags ct JOIN tags t ON t.id = ct.tag_id
-                        WHERE ct.card_id = c.id AND t.name = ?2))
-             ORDER BY c.created_at DESC, c.id DESC
-             LIMIT ?3 OFFSET ?4"
+            "{SELECT_CARD} {FILTER_WHERE} ORDER BY {} LIMIT ?3 OFFSET ?4",
+            order_by(filter.sort)
         );
-        let q = filter
-            .q
-            .as_deref()
-            .map(str::trim)
-            .filter(|q| !q.is_empty())
-            .map(like_pattern);
-        let tag = filter
-            .tag
-            .as_deref()
-            .map(|t| t.trim().to_lowercase())
-            .filter(|t| !t.is_empty());
-
+        let (q, tag) = filter_terms(filter);
         let rows = sqlx::query_as::<_, CardRow>(AssertSqlSafe(sql))
             .bind(q)
             .bind(tag)
@@ -160,6 +185,17 @@ impl CardRepository for SqliteCardRepository {
             .fetch_all(&self.pool)
             .await?;
         into_cards(rows)
+    }
+
+    async fn count(&self, filter: &CardFilter) -> AppResult<i64> {
+        let sql = format!("SELECT COUNT(*) FROM cards c {FILTER_WHERE}");
+        let (q, tag) = filter_terms(filter);
+        let count = sqlx::query_scalar(AssertSqlSafe(sql))
+            .bind(q)
+            .bind(tag)
+            .fetch_one(&self.pool)
+            .await?;
+        Ok(count)
     }
 
     async fn get(&self, id: i64) -> AppResult<Option<Card>> {

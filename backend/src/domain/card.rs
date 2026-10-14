@@ -103,8 +103,26 @@ pub struct CardFilter {
     /// Matches word, meaning or example (case-insensitive).
     pub q: Option<String>,
     pub tag: Option<String>,
+    #[serde(default)]
+    pub sort: CardSort,
     pub limit: Option<i64>,
     pub offset: Option<i64>,
+}
+
+/// Order of the card list. `?sort=az` in the query string.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CardSort {
+    /// Newest first.
+    #[default]
+    Newest,
+    /// Word A to Z.
+    Az,
+    /// Word Z to A.
+    Za,
+    /// Grouped by part of speech in [`PARTS_OF_SPEECH`] order, cards without
+    /// one last; A to Z inside each group.
+    Pos,
 }
 
 impl CardFilter {

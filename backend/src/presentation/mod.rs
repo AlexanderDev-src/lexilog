@@ -39,9 +39,10 @@ pub fn api_routes(cfg: &mut web::ServiceConfig) {
     cfg.service(
         web::scope("/api")
             .service(web::resource("/health").route(web::get().to(health)))
-            // Vocabulary. "/cards/words" comes before "/cards/{id}" so that
-            // "words" isn't read as an id.
+            // Vocabulary. "/cards/words" and "/cards/count" come before "/cards/{id}" so that
+            // they aren't read as an id.
             .service(web::resource("/cards/words").route(web::get().to(card_handlers::words)))
+            .service(web::resource("/cards/count").route(web::get().to(card_handlers::count)))
             .service(
                 web::resource("/cards")
                     .route(web::get().to(card_handlers::list))

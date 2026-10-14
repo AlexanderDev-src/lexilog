@@ -31,6 +31,8 @@ use crate::domain::writing::{
 #[async_trait]
 pub trait CardRepository: Send + Sync {
     async fn list(&self, filter: &CardFilter) -> AppResult<Vec<Card>>;
+    /// How many cards match the filter's search and tag (`limit`/`offset` ignored).
+    async fn count(&self, filter: &CardFilter) -> AppResult<i64>;
     async fn get(&self, id: i64) -> AppResult<Option<Card>>;
     async fn create(&self, input: &CardInput, now: DateTime<Utc>) -> AppResult<Card>;
     /// Returns `false` if the card does not exist.

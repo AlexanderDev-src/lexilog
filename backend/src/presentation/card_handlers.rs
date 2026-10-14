@@ -9,13 +9,22 @@ use crate::domain::error::AppError;
 // calling the function. State = shared app state, Path = `{id}` in the URL,
 // Query = `?q=...`, Json = the request body.
 
-/// GET /api/cards?q=&tag=&limit=&offset=
+/// GET /api/cards?q=&tag=&sort=&limit=&offset=
 pub async fn list(
     state: State<AppState>,
     filter: Query<CardFilter>,
 ) -> Result<HttpResponse, AppError> {
     let cards = state.cards.list(&filter).await?;
     Ok(HttpResponse::Ok().json(&cards))
+}
+
+/// GET /api/cards/count?q=&tag= -> `{ "total": 42 }`
+pub async fn count(
+    state: State<AppState>,
+    filter: Query<CardFilter>,
+) -> Result<HttpResponse, AppError> {
+    let total = state.cards.count(&filter).await?;
+    Ok(HttpResponse::Ok().json(&serde_json::json!({ "total": total })))
 }
 
 /// GET /api/cards/{id}

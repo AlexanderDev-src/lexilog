@@ -24,6 +24,10 @@ impl CardService {
         self.repo.list(filter).await
     }
 
+    pub async fn count(&self, filter: &CardFilter) -> AppResult<i64> {
+        self.repo.count(filter).await
+    }
+
     pub async fn get(&self, id: i64) -> AppResult<Card> {
         // `ok_or` turns `None` into an error; `?` returns early on error.
         self.repo.get(id).await?.ok_or(AppError::NotFound("card"))
